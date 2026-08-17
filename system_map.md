@@ -250,3 +250,30 @@ Auto_Video_TamDuc/
 3. **Địa chỉ truy cập**:
    - Giao diện: `http://localhost:5173/`
    - Backend API: `http://localhost:3001/`
+
+---
+
+## 9. HƯỚNG DẪN SAO LƯU LÊN GITHUB (1-CLICK BACKUP GUIDE)
+
+Repository chính thức: **`https://github.com/ngonco/auto_video_tamduc`**
+
+Hệ thống đã tạo sẵn bộ công cụ sao lưu tự động toàn bộ mã nguồn:
+
+1. **Cách 1 (Nhanh nhất - Dành cho người dùng)**:
+   - Nhấp đúp chuột vào file **`backup.bat`** tại thư mục gốc của dự án.
+   - Cửa sổ console sẽ tự động `git add .`, tạo commit kèm ngày giờ thực tế và `git push origin main`.
+
+2. **Cách 2 (Dành cho Developer / Terminal)**:
+   - Chạy lệnh npm:
+     ```bash
+     npm run backup
+     ```
+
+3. **Cách 3 (PowerShell kèm thông điệp commit tùy chỉnh)**:
+   - Chạy lệnh:
+     ```powershell
+     powershell -ExecutionPolicy Bypass -File ./backup.ps1 "Mô tả nội dung thay đổi"
+     ```
+
+> [!NOTE]
+> File `.gitignore` đã được cấu hình chặt chẽ để tự động loại trừ các khóa API bí mật (`.env`), dữ liệu bộ nhớ đệm (`.cache/`, `.log`), và file build (`node_modules/`, `dist/`), đảm bảo an toàn 100% khi sao lưu công khai hoặc riêng tư trên GitHub.
