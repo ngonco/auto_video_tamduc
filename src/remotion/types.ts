@@ -24,7 +24,9 @@ export interface TimelineClipItem {
   sourceStart: number;   // giây
   sourceDuration: number;// giây
   aspectRatioType: '9:16' | '16:9' | 'other';
+  mediaType?: 'video' | 'image';
 }
+
 
 export interface MainVideoProps {
   durationInFrames: number;

@@ -70,6 +70,12 @@ app.get('/media/stream', (req, res) => {
   else if (ext === '.m4a') contentType = 'audio/mp4';
   else if (ext === '.mov') contentType = 'video/quicktime';
   else if (ext === '.mkv') contentType = 'video/x-matroska';
+  else if (ext === '.webm') contentType = 'video/webm';
+  else if (ext === '.jpg' || ext === '.jpeg') contentType = 'image/jpeg';
+  else if (ext === '.png') contentType = 'image/png';
+  else if (ext === '.webp') contentType = 'image/webp';
+  else if (ext === '.bmp') contentType = 'image/bmp';
+
 
   if (range) {
     const parts = range.replace(/bytes=/, '').split('-');

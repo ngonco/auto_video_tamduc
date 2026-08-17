@@ -67,8 +67,16 @@ function formatAssTime(seconds: number): string {
   return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}.${String(ms).padStart(2, '0')}`;
 }
 
+const IMAGE_EXTS = ['.jpg', '.jpeg', '.png', '.webp', '.bmp'];
+
+function isImageFile(filePath: string): boolean {
+  const ext = path.extname(filePath || '').toLowerCase();
+  return IMAGE_EXTS.includes(ext);
+}
+
 /**
  * Render Video Hoàn Chỉnh chuẩn 9:16 (1080x1920) với FFmpeg
+ * Tích hợp: Hiệu ứng chuyển cảnh Cross Dissolve giữa các video và Zoom nhẹ (Ken Burns) cho ảnh
  */
 export async function renderFinalVideo(
   req: RenderRequest,
@@ -90,8 +98,10 @@ export async function renderFinalVideo(
   const assPath = path.join(tempDir, 'subtitles.ass');
   generateAssKaraokeSubtitleFile(req.subtitles, assPath);
 
-  // 2. Cắt và chuẩn hóa từng clip thành 1080x1920 (xử lý clip ngang làm mờ nền)
+  // 2. Cắt và chuẩn hóa từng clip thành 1080x1920
+  // (Ảnh: Tạo chuyển động Ken Burns zoom nhẹ 1.0x -> 1.12x; Video: Làm mờ nền nếu là 16:9)
   const normalizedClipPaths: string[] = [];
+  const clipDurations: number[] = [];
   let clipIdx = 0;
 
   for (const clip of req.clips) {
@@ -100,55 +110,106 @@ export async function renderFinalVideo(
       onProgress(pct, `Đang xử lý chuẩn hóa clip ${clipIdx + 1}/${req.clips.length}...`);
     }
 
+    const isImage = clip.mediaType === 'image' || isImageFile(clip.filePath);
     const outClip = path.join(tempDir, `norm_clip_${clipIdx}.mp4`);
+    const duration = Math.max(1.0, clip.sourceDuration || 3.5);
 
     await new Promise<void>((resolve, reject) => {
-      let filterString = '';
+      let command = ffmpeg(clip.filePath);
 
-      if (clip.aspectRatioType === '16:9') {
-        // Clip ngang: Làm mờ nền 1080x1920 + Đặt clip nét ở giữa
-        filterString = `[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=20:5[bg];[0:v]scale=1080:-1[fg];[bg][fg]overlay=(W-w)/2:(H-h)/2,setsar=1,fps=30`;
+      if (isImage) {
+        // --- XỬ LÝ ẢNH TĨNH: HIỆU ỨNG ZOOM NHẸ (KEN BURNS) ---
+        command.inputOptions(['-loop 1', `-t ${duration}`]);
+
+        let filterString = '';
+        if (clip.aspectRatioType === '16:9') {
+          // Ảnh ngang: Nền mờ phóng to nhẹ + Ảnh nét trung tâm zoom nhẹ
+          filterString = `[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=20:5,scale=w='1080*(1+0.06*t/${duration})':h='1920*(1+0.06*t/${duration})':eval=frame,crop=1080:1920:(iw-1080)/2:(ih-1920)/2[bg];[0:v]scale=1080:-1[fg];[bg][fg]overlay=(W-w)/2:(H-h)/2,setsar=1,fps=30,scale=in_range=full:out_range=tv,format=yuv420p[outv]`;
+        } else {
+          // Ảnh dọc 9:16: Zoom mượt từ 1.0x lên 1.10x từ tâm
+          filterString = `[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,scale=w='1080*(1+0.10*t/${duration})':h='1920*(1+0.10*t/${duration})':eval=frame,crop=1080:1920:(iw-1080)/2:(ih-1920)/2,setsar=1,fps=30,scale=in_range=full:out_range=tv,format=yuv420p[outv]`;
+        }
+
+        command
+          .complexFilter(filterString)
+          .noAudio()
+          .outputOptions(['-map [outv]', '-c:v libx264', '-preset veryfast', '-crf 20', '-pix_fmt yuv420p', `-t ${duration}`])
+          .output(outClip)
+          .on('end', () => resolve())
+          .on('error', (err) => reject(err))
+          .run();
       } else {
-        // Clip dọc: Scale fill 1080x1920
-        filterString = `scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1,fps=30`;
-      }
+        // --- XỬ LÝ VIDEO CLIP ---
+        let filterString = '';
+        if (clip.aspectRatioType === '16:9') {
+          // Clip ngang: Làm mờ nền 1080x1920 + Đặt clip nét ở giữa
+          filterString = `[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=20:5[bg];[0:v]scale=1080:-1[fg];[bg][fg]overlay=(W-w)/2:(H-h)/2,setsar=1,fps=30,format=yuv420p[outv]`;
+        } else {
+          // Clip dọc: Scale fill 1080x1920
+          filterString = `[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1,fps=30,format=yuv420p[outv]`;
+        }
 
-      ffmpeg(clip.filePath)
-        .setStartTime(clip.sourceStart)
-        .setDuration(clip.sourceDuration)
-        .videoFilters(filterString)
-        .noAudio()
-        .outputOptions(['-c:v libx264', '-preset veryfast', '-crf 20', '-pix_fmt yuv420p'])
-        .output(outClip)
+        command
+          .setStartTime(clip.sourceStart || 0)
+          .setDuration(duration)
+          .complexFilter(filterString)
+          .noAudio()
+          .outputOptions(['-map [outv]', '-c:v libx264', '-preset veryfast', '-crf 20', '-pix_fmt yuv420p'])
+          .output(outClip)
+          .on('end', () => resolve())
+          .on('error', (err) => reject(err))
+          .run();
+      }
+    });
+
+    normalizedClipPaths.push(outClip);
+    clipDurations.push(duration);
+    clipIdx++;
+  }
+
+  // 3. Ghép nối toàn bộ các clip với HIỆU ỨNG CHUYỂN CẢNH CROSS DISSOLVE (xfade)
+  if (onProgress) {
+    onProgress(50, 'Đang hòa trộn chuyển cảnh Cross Dissolve giữa các video...');
+  }
+
+  const stitchedVideoPath = path.join(tempDir, 'stitched.mp4');
+
+  if (normalizedClipPaths.length === 1) {
+    fs.copyFileSync(normalizedClipPaths[0], stitchedVideoPath);
+  } else {
+    const transDur = 0.5; // 0.5 giây chuyển cảnh hòa tan
+    let concatCommand = ffmpeg();
+    normalizedClipPaths.forEach((p) => concatCommand.input(p));
+
+    const filterChains: string[] = [];
+    let currentAccumulated = clipDurations[0];
+
+    for (let i = 1; i < normalizedClipPaths.length; i++) {
+      const prevLabel = i === 1 ? '[0:v]' : `[v${i - 1}]`;
+      const nextLabel = `[${i}:v]`;
+      const isLast = i === normalizedClipPaths.length - 1;
+      const outLabel = isLast ? '[v_xfade_end]' : `[v${i}]`;
+      const actualTrans = Math.min(transDur, clipDurations[i - 1] * 0.4, clipDurations[i] * 0.4);
+      const offset = Math.max(0.1, currentAccumulated - actualTrans);
+
+      filterChains.push(`${prevLabel}${nextLabel}xfade=transition=fade:duration=${actualTrans.toFixed(2)}:offset=${offset.toFixed(2)}${outLabel}`);
+      currentAccumulated = currentAccumulated + clipDurations[i] - actualTrans;
+    }
+
+    filterChains.push(`[v_xfade_end]format=yuv420p[outv]`);
+
+    await new Promise<void>((resolve, reject) => {
+      concatCommand
+        .complexFilter(filterChains.join('; '))
+        .outputOptions(['-map [outv]', '-c:v libx264', '-preset veryfast', '-crf 20', '-pix_fmt yuv420p'])
+        .output(stitchedVideoPath)
         .on('end', () => resolve())
         .on('error', (err) => reject(err))
         .run();
     });
-
-    normalizedClipPaths.push(outClip);
-    clipIdx++;
   }
 
-  // 3. Nối các clip video lại thành 1 chuỗi liên tục
-  if (onProgress) {
-    onProgress(50, 'Đang ghép nối toàn bộ các đoạn video...');
-  }
 
-  const concatListFile = path.join(tempDir, 'concat_list.txt');
-  const fileContent = normalizedClipPaths.map((p) => `file '${p.replace(/'/g, "'\\''")}'`).join('\n');
-  fs.writeFileSync(concatListFile, fileContent, 'utf-8');
-
-  const stitchedVideoPath = path.join(tempDir, 'stitched.mp4');
-  await new Promise<void>((resolve, reject) => {
-    ffmpeg()
-      .input(concatListFile)
-      .inputOptions(['-f concat', '-safe 0'])
-      .outputOptions(['-c copy'])
-      .output(stitchedVideoPath)
-      .on('end', () => resolve())
-      .on('error', (err) => reject(err))
-      .run();
-  });
 
   // 4. Ghép Âm thanh (Voice + BGM Ducking) và Burn Subtitle Karaoke
   if (onProgress) {
@@ -169,7 +230,7 @@ export async function renderFinalVideo(
     const voiceVol = req.voiceVolume || 1.0;
     const bgmVol = req.bgmVolume || 0.15;
 
-    let complexFilter = `[0:v]subtitles=filename='${normalizedAssPath}'[outv];`;
+    let complexFilter = `[0:v]subtitles=filename='${normalizedAssPath}',format=yuv420p[outv];`;
 
     if (hasBgm) {
       complexFilter += `[1:a]volume=${voiceVol}[voice];[2:a]volume=${bgmVol},aloop=loop=-1:size=2e+09[bgm];[voice][bgm]amix=inputs=2:duration=first[outa]`;
@@ -185,11 +246,15 @@ export async function renderFinalVideo(
         '-c:v libx264',
         '-preset medium',
         '-crf 18',
+        '-profile:v high',
+        '-level 4.1',
+        '-pix_fmt yuv420p',
         '-c:a aac',
         '-b:a 192k',
+        '-ar 44100',
         '-shortest',
-        '-pix_fmt yuv420p',
       ])
+
       .output(finalOutputPath)
       .on('progress', (progress) => {
         if (onProgress && progress.percent) {

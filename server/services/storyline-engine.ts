@@ -1,3 +1,11 @@
+import path from 'path';
+
+const IMAGE_EXTS = ['.jpg', '.jpeg', '.png', '.webp', '.bmp'];
+function isImageFile(filePath: string): boolean {
+  const ext = path.extname(filePath || '').toLowerCase();
+  return IMAGE_EXTS.includes(ext);
+}
+
 export interface SourceClipRecord {
   id: string;
   projectId: string;
@@ -11,6 +19,7 @@ export interface SourceClipRecord {
   aestheticScore: number;
   sceneDescription: string;
   thumbnailPath: string;
+  mediaType?: 'video' | 'image';
 }
 
 export interface TimelineClipItem {
@@ -25,7 +34,9 @@ export interface TimelineClipItem {
   sourceStart: number;   // Điểm cắt đầu trong file gốc (giây)
   sourceDuration: number;// Thời lượng của đoạn cắt (giây)
   aspectRatioType: '9:16' | '16:9' | 'other';
+  mediaType?: 'video' | 'image';
 }
+
 
 export interface StorylineGenerationResult {
   totalDuration: number;
@@ -52,7 +63,23 @@ export function generateStoryline(
     return { totalDuration: targetDuration, clips: [] };
   }
 
-  // Nhóm clip theo 4 giai đoạn và sắp xếp theo điểm thẩm mỹ cao nhất trước
+  // Chuẩn hóa và nhóm clip theo 4 giai đoạn và sắp xếp theo điểm thẩm mỹ cao nhất trước
+  const normalizedSources: SourceClipRecord[] = sourceClips.map((s: any) => ({
+    id: s.id,
+    projectId: s.projectId || s.project_id,
+    fileName: s.fileName || s.file_name,
+    filePath: s.filePath || s.file_path,
+    duration: Number(s.duration) || 5.0,
+    width: Number(s.width) || 1080,
+    height: Number(s.height) || 1920,
+    aspectRatioType: s.aspectRatioType || s.aspect_ratio_type || '9:16',
+    stage: s.stage || 'STAGE_2_ASSEMBLY_FINISHING',
+    aestheticScore: Number(s.aestheticScore ?? s.aesthetic_score ?? 7.5),
+    sceneDescription: s.sceneDescription || s.scene_description || '',
+    thumbnailPath: s.thumbnailPath || s.thumbnail_path || '',
+    mediaType: s.mediaType || (isImageFile(s.filePath || s.file_path) ? 'image' : 'video'),
+  }));
+
   const clipsByStage: Record<string, SourceClipRecord[]> = {
     STAGE_1_RAW_CARPENTRY: [],
     STAGE_2_ASSEMBLY_FINISHING: [],
@@ -60,7 +87,7 @@ export function generateStoryline(
     STAGE_4_WORSHIP_ALTAR: [],
   };
 
-  sourceClips.forEach((clip) => {
+  normalizedSources.forEach((clip) => {
     const stage = clip.stage || 'STAGE_2_ASSEMBLY_FINISHING';
     if (!clipsByStage[stage]) {
       clipsByStage[stage] = [];
@@ -79,7 +106,7 @@ export function generateStoryline(
   // Nếu không có stage nào khớp, dùng toàn bộ clip
   if (availableStages.length === 0) {
     availableStages.push('STAGE_2_ASSEMBLY_FINISHING');
-    clipsByStage['STAGE_2_ASSEMBLY_FINISHING'] = [...sourceClips];
+    clipsByStage['STAGE_2_ASSEMBLY_FINISHING'] = [...normalizedSources];
   }
 
   // Tính tỷ lệ thời lượng cho từng stage có sẵn
@@ -124,8 +151,9 @@ export function generateStoryline(
       if (cutDuration < 0.5) break;
 
       // Điểm bắt đầu cắt trong file gốc
-      const maxSourceStart = Math.max(0, (source.duration || 10) - cutDuration);
-      const sourceStart = Math.min(Math.random() * maxSourceStart, maxSourceStart);
+      const isImg = source.mediaType === 'image' || isImageFile(source.filePath);
+      const maxSourceStart = isImg ? 0 : Math.max(0, (source.duration || 10) - cutDuration);
+      const sourceStart = isImg ? 0 : Math.min(Math.random() * maxSourceStart, maxSourceStart);
 
       timelineClips.push({
         id: `clip_${clipIndexCounter++}`,
@@ -139,6 +167,7 @@ export function generateStoryline(
         sourceStart: Number(sourceStart.toFixed(2)),
         sourceDuration: Number(cutDuration.toFixed(2)),
         aspectRatioType: source.aspectRatioType,
+        mediaType: isImg ? 'image' : 'video',
       });
 
       stageCurrentTime += cutDuration;
@@ -152,7 +181,7 @@ export function generateStoryline(
     const remaining = targetDuration - currentTimelineTime;
     const bestClips = clipsByStage['STAGE_4_WORSHIP_ALTAR'].length > 0
       ? clipsByStage['STAGE_4_WORSHIP_ALTAR']
-      : sourceClips;
+      : normalizedSources;
 
     let poolIdx = 0;
     let extraTime = currentTimelineTime;
@@ -163,6 +192,8 @@ export function generateStoryline(
 
       const cutDuration = Math.min(maxClipSec, targetDuration - extraTime);
       if (cutDuration < 0.2) break;
+
+      const isImg = source.mediaType === 'image' || isImageFile(source.filePath);
 
       timelineClips.push({
         id: `clip_${clipIndexCounter++}`,
@@ -176,6 +207,7 @@ export function generateStoryline(
         sourceStart: 0,
         sourceDuration: Number(cutDuration.toFixed(2)),
         aspectRatioType: source.aspectRatioType,
+        mediaType: isImg ? 'image' : 'video',
       });
 
       extraTime += cutDuration;
@@ -187,3 +219,4 @@ export function generateStoryline(
     clips: timelineClips,
   };
 }
+

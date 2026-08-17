@@ -6,7 +6,14 @@ import { db } from './db.js';
 import { getVideoMetadata, extractKeyframes } from './services/ffmpeg.js';
 import { analyzeVideoFrames } from './services/vision-analyzer.js';
 
-const VIDEO_EXTS = ['.mp4', '.mov', '.mkv', '.avi', '.webm', '.m4v'];
+export const VIDEO_EXTS = ['.mp4', '.mov', '.mkv', '.avi', '.webm', '.m4v'];
+export const IMAGE_EXTS = ['.jpg', '.jpeg', '.png', '.webp', '.bmp'];
+export const MEDIA_EXTS = [...VIDEO_EXTS, ...IMAGE_EXTS];
+
+export function isImageFile(filePath: string): boolean {
+  const ext = path.extname(filePath).toLowerCase();
+  return IMAGE_EXTS.includes(ext);
+}
 
 export class FolderWatcherService {
   private watcher: any = null;
@@ -39,7 +46,8 @@ export class FolderWatcherService {
 
   private async handleFileAdded(filePath: string, rootDir: string) {
     const ext = path.extname(filePath).toLowerCase();
-    if (!VIDEO_EXTS.includes(ext)) return;
+    if (!MEDIA_EXTS.includes(ext)) return;
+
 
     // Xác định thư mục công trình (subfolder trực tiếp dưới rootDir)
     const relative = path.relative(rootDir, filePath);
@@ -164,8 +172,8 @@ export class FolderWatcherService {
 
     const folderName = path.basename(folderPath) || 'CongTrinh_' + Date.now();
 
-    // 1. Quét tìm tất cả các file video trong thư mục
-    const videoFiles: string[] = [];
+    // 1. Quét tìm tất cả các file video/ảnh trong thư mục
+    const mediaFiles: string[] = [];
     const scanDir = (dir: string, depth = 0) => {
       if (depth > 2) return;
       const entries = fs.readdirSync(dir, { withFileTypes: true });
@@ -175,8 +183,8 @@ export class FolderWatcherService {
           scanDir(full, depth + 1);
         } else if (entry.isFile()) {
           const ext = path.extname(entry.name).toLowerCase();
-          if (VIDEO_EXTS.includes(ext)) {
-            videoFiles.push(full);
+          if (MEDIA_EXTS.includes(ext)) {
+            mediaFiles.push(full);
           }
         }
       }
@@ -184,8 +192,8 @@ export class FolderWatcherService {
 
     scanDir(folderPath);
 
-    if (videoFiles.length === 0) {
-      throw new Error(`Thư mục "${folderName}" không chứa file video hợp lệ (.mp4, .mov, .mkv, .avi, .webm)`);
+    if (mediaFiles.length === 0) {
+      throw new Error(`Thư mục "${folderName}" không chứa file video/ảnh hợp lệ (.mp4, .mov, .mkv, .avi, .webm, .jpg, .png, .webp)`);
     }
 
     // 2. Tạo hoặc lấy Project trong Database
@@ -195,15 +203,19 @@ export class FolderWatcherService {
       db.prepare(`
         INSERT INTO projects (id, folder_name, folder_path, total_videos, is_embedded, last_scanned_at)
         VALUES (?, ?, ?, ?, 0, datetime('now'))
-      `).run(projectId, folderName, folderPath, videoFiles.length);
+      `).run(projectId, folderName, folderPath, mediaFiles.length);
 
       project = db.prepare('SELECT * FROM projects WHERE id = ?').get(projectId);
     } else {
-      db.prepare('UPDATE projects SET total_videos = ?, last_scanned_at = datetime(\'now\') WHERE id = ?').run(videoFiles.length, project.id);
+      db.prepare('UPDATE projects SET total_videos = ?, last_scanned_at = datetime(\'now\') WHERE id = ?').run(mediaFiles.length, project.id);
     }
 
-    // 3. Ghi nhận các file video vào bảng video_sources
-    for (const filePath of videoFiles) {
+    // 3. Xóa các file cũ đã bị xóa khỏi ổ đĩa
+    const placeholders = mediaFiles.map(() => '?').join(',');
+    db.prepare(`DELETE FROM video_sources WHERE project_id = ? AND file_path NOT IN (${placeholders})`).run(project.id, ...mediaFiles);
+
+    // 4. Ghi nhận các file media mới vào bảng video_sources
+    for (const filePath of mediaFiles) {
       const fileName = path.basename(filePath);
       const existing = db.prepare('SELECT id FROM video_sources WHERE file_path = ?').get(filePath);
       if (!existing) {
@@ -214,6 +226,7 @@ export class FolderWatcherService {
         `).run(videoId, project.id, fileName, filePath);
       }
     }
+
 
     // 4. Tự động chạy tiến trình phân tích AI 4 giai đoạn
     await this.scanAndEmbedProject(project.id, onProgress);

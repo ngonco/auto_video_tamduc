@@ -12,8 +12,14 @@
 - **Tên dự án**: Auto Video Tâm Đức (`Auto_Video_TamDuc`)
 - **Mục tiêu**: Tự động dựng video định dạng dọc **9:16** (1080x1920) cho chủ đề **Không Gian Thờ Phật / Bàn Thờ Phật** từ:
   1. File âm thanh Voice đọc tiếng Việt (phật pháp, đạo lý, tu tập, phước báu...).
-  2. Thư mục Source lớn chứa các Folder con (mỗi folder con là 1 công trình thi công / bài trí bàn thờ Phật).
-- **Output**: Video 9:16 hoàn chỉnh với Voice, phụ đề Karaoke tiếng Việt đổi màu từng từ theo thời gian thực (chuẩn mốc thời gian, không lỗi font), nhạc thiền BGM tự hạ âm (Audio Ducking), và Timeline tương tác trực quan cho phép xem trước, kéo thả đổi clip và sửa chữ phụ đề.
+  2. Thư mục Source chứa các Folder công trình bao gồm cả **Video** (.mp4, .mov, .mkv, .avi, .webm) và **Ảnh** (.jpg, .jpeg, .png, .webp, .bmp).
+- **Output**: Video 9:16 hoàn chỉnh với:
+  - Voice + Nhạc thiền BGM tự động hạ âm (Audio Ducking).
+  - Phụ đề Karaoke tiếng Việt đổi màu vàng kim từng từ theo thời gian thực (chuẩn mốc thời gian, không lỗi font).
+  - **Hiệu ứng chuyển cảnh Cross Dissolve (0.5s)** hòa tan mượt mà giữa các clip (loại bỏ cắt đột ngột).
+  - **Hiệu ứng Zoom nhẹ (Ken Burns scale 1.0x -> 1.10x)** tạo chuyển động sống động cho media là ảnh tĩnh.
+  - Xử lý mượt mà clip/ảnh ngang 16:9 với nền mờ ảo (Blurred Backdrop).
+  - Timeline tương tác trực quan Remotion Player cho phép xem trước, kéo thả đổi clip và sửa chữ phụ đề.
 
 ---
 
@@ -30,16 +36,16 @@
   └── 4. Cài Đặt Hệ Thống    (src/components/SettingsView/)     : Quản lý API Key, Base URL, thư mục Source & Exports
 -------------------------------------------------------------------------------------------------------
 [ TẦNG ENGINE & BACKEND (Node.js Express + SQLite + FFmpeg + OpenAI SDK) ]
-  ├── Watcher Module         (server/watcher.ts)                : Chokidar theo dõi Folder Source (Chế độ Hybrid)
-  ├── Frame Extractor        (server/services/ffmpeg.ts)        : Trích 2-3 frame JPEG 720p đại diện (SIÊU TIẾT KIỆM)
+  ├── Watcher Module         (server/watcher.ts)                : Chokidar theo dõi Folder Source (Video + Ảnh)
+  ├── Frame Extractor        (server/services/ffmpeg.ts)        : Trích frame JPEG 720p / thumbnail từ video và ảnh
   ├── Vision Analyzer        (server/services/vision-analyzer.ts): Phân loại 4 giai đoạn bằng ts/gemini-3.1-flash-lite
   ├── STT Whisper Engine     (server/services/stt-service.ts)   : Nhận diện tiếng Việt bóc word timestamps
   ├── Subtitle Fixer LLM     (server/services/subtitle-fixer.ts): Chuẩn hóa từ ngữ Phật học & ngắt nhịp 9:16
-  ├── Storyline Engine       (server/services/storyline-engine.ts): Phân bổ clip 4 giai đoạn theo thời lượng Voice
-  └── Render Service         (server/services/render-service.ts): Render MP4 1080x1920 với phụ đề ASS Karaoke
+  ├── Storyline Engine       (server/services/storyline-engine.ts): Phân bổ clip/ảnh 4 giai đoạn theo thời lượng Voice
+  └── Render Service         (server/services/render-service.ts): Render MP4 1080x1920 (Cross Dissolve + Image Zoom + ASS Karaoke)
 -------------------------------------------------------------------------------------------------------
 [ TẦNG LƯU TRỮ CỤC BỘ (Local Storage) ]
-  ├── database/library.db    : SQLite Single-file (Bảng projects, video_sources, generated_videos, settings)
+  ├── database/library.db    : SQLite Single-file (Bảng projects, video_sources, generated_videos, settings, voices)
   ├── .cache/                : Cache frames trích xuất (.cache/frames), thumbnails, uploads, render temp
   ├── assets/fonts/          : Thư viện font tiếng Việt chuẩn (Be Vietnam Pro, Montserrat, Lexend)
   ├── assets/bgm/            : Kho nhạc thiền Phật giáo không lời
@@ -67,7 +73,7 @@ Tất cả các dịch vụ AI kết nối qua API Gateway chuẩn OpenAI SDK (`
 
 ---
 
-## 4. QUY TRÌNH 4 GIAI ĐOẠN (STORYLINE 4-STAGE ALLOCATION)
+## 4. QUY TRÌNH 4 GIAI ĐOẠN & HIỆU ỨNG HÌNH ẢNH (STORYLINE & VISUAL EFFECTS)
 
 Mỗi clip được cắt ngắn **3.0s - 4.5s** và phân bổ theo tiến trình thời gian thi công bàn thờ:
 
@@ -90,9 +96,19 @@ Tổng thời lượng Video = Thời lượng Voice (T giây)
 - Tag: STAGE_4_WORSHIP_ALTAR
 - Nội dung: Bật đèn hào quang sáng rực, toàn cảnh không gian thờ thanh tịnh, chắp tay lễ Phật.
 
-* Quy tắc Thích Ứng: Nếu folder chỉ có cảnh cắm hoa & lễ Phật (không có thợ làm tủ thô), hệ thống tự co giãn: 40% đầu là Cắm hoa/Trang trí -> 60% sau là Lễ Phật trang nghiêm.
-* Quy tắc 9:16: Clip ngang 16:9 tự động làm mờ nền (Blurred Backdrop) + clip chính nét ở giữa, GIỮ NGUYÊN chuyển động gốc (không zoom/pan).
+* Quy Tắc Chuyển Cảnh (Cross Dissolve):
+  - Thời lượng hòa tan: 0.5s giữa mọi clip liền kề.
+  - Remotion Player: Render lớp dưới và lớp trên với opacity nội suy mượt mà.
+  - FFmpeg Engine: Chuỗi bộ lọc `xfade=transition=fade:duration=0.5:offset=...`.
+
+* Quy Tắc Media là Ảnh Tĩnh (Ken Burns Zoom):
+  - Ảnh dọc 9:16: Zoom nhẹ từ tâm (scale 1.0x -> 1.10x) trong suốt thời lượng hiển thị clip.
+  - Ảnh ngang 16:9: Nền mờ phóng to nhẹ + Ảnh nét trung tâm zoom nhẹ.
+
+* Quy Tắc 9:16 Cho Clip Ngang 16:9:
+  - Nền mờ (Blurred Backdrop) 1080x1920 + clip chính nét ở giữa khung hình.
 ```
+
 
 ---
 
