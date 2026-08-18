@@ -15,6 +15,8 @@ export const MainVideo: React.FC<MainVideoProps> = ({
   fontFamily = 'Be Vietnam Pro',
   activeWordColor = '#FFD700',
   inactiveWordColor = '#FFFFFF',
+  fontSize,
+  positionBottomPercent,
   voiceDuration,
 }) => {
   return (
@@ -28,6 +30,8 @@ export const MainVideo: React.FC<MainVideoProps> = ({
         fontFamily={fontFamily}
         activeColor={activeWordColor}
         inactiveColor={inactiveWordColor}
+        fontSize={fontSize}
+        positionBottomPercent={positionBottomPercent}
       />
 
       {/* 3. Tầng Âm thanh (Voice + BGM fade-out trước Outro) */}

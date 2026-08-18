@@ -58,6 +58,8 @@ export interface MainVideoProps {
   fontFamily?: string;
   activeWordColor?: string;
   inactiveWordColor?: string;
+  fontSize?: number;
+  positionBottomPercent?: number;
   voiceDuration?: number;
   outroPath?: string;
   outroDuration?: number;

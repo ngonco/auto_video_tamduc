@@ -35,6 +35,9 @@ export interface RenderRequest {
   clips: TimelineClipItem[];
   subtitles: SubtitleLine[];
   outputDir: string;
+  subtitleFontSize?: number;
+  subtitleBottomPercent?: number;
+  fontFamily?: string;
   outroPath?: string;
   outroEnabled?: boolean;
   outroDuration?: number;
@@ -62,8 +65,13 @@ async function checkHasAudio(filePath: string): Promise<boolean> {
 export function generateAssKaraokeSubtitleFile(
   subtitles: SubtitleLine[],
   outAssPath: string,
-  fontFamily: string = 'Be Vietnam Pro'
+  fontFamily: string = 'Be Vietnam Pro',
+  fontSize: number = 65,
+  bottomPercent: number = 22
 ) {
+  const marginV = Math.round(1920 * (bottomPercent / 100));
+  const outlineWidth = Math.max(3, Math.round(fontSize * 0.07 * 10) / 10);
+
   let assContent = `[Script Info]
 Title: Auto Video Tam Duc Karaoke
 ScriptType: v4.00+
@@ -75,7 +83,7 @@ PlayResY: 1920
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Karaoke,${fontFamily},50,&H0000D7FF,&H00FFFFFF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,3.5,2,2,40,40,420,1
+Style: Karaoke,${fontFamily},${fontSize},&H0000D7FF,&H00FFFFFF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,${outlineWidth},2,2,40,40,${marginV},1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -143,7 +151,10 @@ export async function renderFinalVideo(
     onProgress(5, 'Đang chuẩn bị file phụ đề Karaoke tiếng Việt...');
   }
   const assPath = path.join(tempDir, 'subtitles.ass');
-  generateAssKaraokeSubtitleFile(req.subtitles, assPath);
+  const subFontSize = req.subtitleFontSize || 65;
+  const subBottomPct = req.subtitleBottomPercent || 22;
+  const subFontFamily = req.fontFamily || 'Be Vietnam Pro';
+  generateAssKaraokeSubtitleFile(req.subtitles, assPath, subFontFamily, subFontSize, subBottomPct);
 
   // 2. Lấy thời lượng Voice chính xác
   let exactVoiceDuration = 60;

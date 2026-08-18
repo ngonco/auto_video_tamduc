@@ -303,6 +303,35 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
   const [editingSubId, setEditingSubId] = useState<string | null>(null);
   const [editingSubText, setEditingSubText] = useState<string>('');
 
+  // Subtitle custom size & position state (with persistence)
+  const [subtitleFontSize, setSubtitleFontSize] = useState<number>(() => {
+    const saved = localStorage.getItem('auto_video_subtitle_fontsize');
+    return saved ? Number(saved) : 65;
+  });
+  const [subtitleBottomPercent, setSubtitleBottomPercent] = useState<number>(() => {
+    const saved = localStorage.getItem('auto_video_subtitle_bottom_percent');
+    return saved ? Number(saved) : 22;
+  });
+
+  const handleFontSizeChange = (size: number) => {
+    const clamped = Math.max(40, Math.min(90, isNaN(size) ? 65 : size));
+    setSubtitleFontSize(clamped);
+    localStorage.setItem('auto_video_subtitle_fontsize', String(clamped));
+  };
+
+  const handleBottomPercentChange = (percent: number) => {
+    const clamped = Math.max(12, Math.min(35, isNaN(percent) ? 22 : percent));
+    setSubtitleBottomPercent(clamped);
+    localStorage.setItem('auto_video_subtitle_bottom_percent', String(clamped));
+  };
+
+  const handleResetSubtitleStyles = () => {
+    setSubtitleFontSize(65);
+    setSubtitleBottomPercent(22);
+    localStorage.setItem('auto_video_subtitle_fontsize', '65');
+    localStorage.setItem('auto_video_subtitle_bottom_percent', '22');
+  };
+
   // Selected clip state
   const [selectedClipId, setSelectedClipId] = useState<string | null>(null);
 
@@ -484,10 +513,10 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
     return () => el.removeEventListener('wheel', handler);
   }, []);
 
-  // ── Helper: Cân bằng & Tự bù clip giữ chuẩn 4.0s - 5.5s (Tối đa 6.0s) ──
+  // ── Helper: Cân bằng & Tự bù clip giữ chuẩn 4.0s - 5.5s (Tối đa 6.0s) trong phạm vi Voice ──
   const rebalanceClips = useCallback(
     (clips: TimelineClipItem[]): TimelineClipItem[] => {
-      const total = totalDuration;
+      const total = voiceDuration;
       if (total <= 0) return clips;
       const idealClipDur = 5.0;
       let neededCount = Math.max(1, Math.ceil(total / 5.5));
@@ -567,13 +596,13 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
         return newClip;
       });
     },
-    [totalDuration, timelineData.availableSources]
+    [voiceDuration, timelineData.availableSources]
   );
 
   // ── Helper: recalculate sequential timeline positions after simple drag/move ──
   const recalcTimelinePositions = useCallback(
     (clips: TimelineClipItem[]): TimelineClipItem[] => {
-      const total = totalDuration;
+      const total = voiceDuration;
       const eachDur = total / clips.length;
       let curTime = 0;
       return clips.map((c, i) => {
@@ -589,8 +618,17 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
         return newClip;
       });
     },
-    [totalDuration]
+    [voiceDuration]
   );
+
+  // ── Tự động chuẩn hóa lại clips khớp chính xác 100% voiceDuration nếu session trước bị kéo lệch ──
+  useEffect(() => {
+    if (!timelineData.clips || timelineData.clips.length === 0 || voiceDuration <= 0) return;
+    const currentSum = timelineData.clips.reduce((acc, c) => acc + (c.sourceDuration || 0), 0);
+    if (Math.abs(currentSum - voiceDuration) > 0.15) {
+      onUpdateClips(recalcTimelinePositions(timelineData.clips));
+    }
+  }, [voiceDuration, recalcTimelinePositions, onUpdateClips]);
 
   // ── Clip manipulation ──
   const handleMoveClip = useCallback(
@@ -822,6 +860,8 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
           voiceVolume,
           clips: timelineData.clips,
           subtitles: timelineData.subtitles,
+          subtitleFontSize,
+          subtitleBottomPercent,
           outroPath: isOutroActive ? outroPath : undefined,
           outroEnabled: isOutroActive,
           outroDuration: isOutroActive ? outroDuration : 0,
@@ -957,6 +997,8 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
       fontFamily: 'Be Vietnam Pro',
       activeWordColor: '#FFD700',
       inactiveWordColor: '#FFFFFF',
+      fontSize: subtitleFontSize,
+      positionBottomPercent: subtitleBottomPercent,
       voiceDuration,
       outroPath: isOutroActive ? outroPath : undefined,
       outroDuration: isOutroActive ? outroDuration : 0,
@@ -971,6 +1013,8 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
       selectedBgm,
       voiceVolume,
       bgmVolume,
+      subtitleFontSize,
+      subtitleBottomPercent,
       voiceDuration,
       isOutroActive,
       outroPath,
@@ -1004,9 +1048,9 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
           </div>
         </div>
 
-        {/* Bảng Điều Khiển & Cài Đặt Âm Thanh / Render */}
-        <div className="w-96 flex flex-col justify-between bg-[#151D2E] border border-slate-800 rounded-2xl p-6 shadow-xl">
-          <div className="space-y-5">
+        {/* Bảng Điều Khiển & Cài Đặt Âm Thanh / Phụ Đề / Render */}
+        <div className="w-96 flex flex-col justify-between bg-[#151D2E] border border-slate-800 rounded-2xl p-5 shadow-xl min-h-0">
+          <div className="space-y-4 overflow-y-auto pr-1 custom-scrollbar min-h-0 flex-1">
             {/* Info Box */}
             <div>
               <span className="text-[11px] font-bold text-amber-400 uppercase tracking-wider">
@@ -1021,6 +1065,77 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
             </div>
 
             <hr className="border-slate-800" />
+
+            {/* Subtitle Customization Card */}
+            <div className="p-3.5 bg-slate-900/90 border border-amber-500/30 rounded-xl space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold text-amber-300 flex items-center gap-1.5">
+                  <Type className="w-3.5 h-3.5 text-amber-400" />
+                  Cài Đặt Phụ Đề Karaoke
+                </span>
+                <button
+                  onClick={handleResetSubtitleStyles}
+                  className="text-[10px] text-slate-400 hover:text-amber-300 underline cursor-pointer"
+                  title="Khôi phục cỡ chữ 65px & vị trí 22%"
+                >
+                  Mặc định
+                </button>
+              </div>
+
+              {/* Font Size Slider */}
+              <div className="space-y-1">
+                <div className="flex justify-between text-[11px] text-slate-400">
+                  <span>Cỡ chữ phụ đề:</span>
+                  <span className="font-mono text-amber-400 font-bold">{subtitleFontSize}px</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="range"
+                    min="40"
+                    max="90"
+                    step="1"
+                    value={subtitleFontSize}
+                    onChange={(e) => handleFontSizeChange(parseInt(e.target.value, 10))}
+                    className="flex-1 accent-amber-500 h-1.5 bg-slate-800 rounded-lg cursor-pointer"
+                  />
+                  <input
+                    type="number"
+                    min="40"
+                    max="90"
+                    value={subtitleFontSize}
+                    onChange={(e) => handleFontSizeChange(parseInt(e.target.value, 10))}
+                    className="w-12 bg-slate-950 border border-slate-700 text-amber-400 font-mono text-xs text-center rounded px-1 py-0.5 outline-none focus:border-amber-500"
+                  />
+                </div>
+              </div>
+
+              {/* Bottom Position Slider */}
+              <div className="space-y-1">
+                <div className="flex justify-between text-[11px] text-slate-400">
+                  <span>Vị trí lề đáy (Safe Zone):</span>
+                  <span className="font-mono text-amber-400 font-bold">{subtitleBottomPercent}%</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="range"
+                    min="12"
+                    max="35"
+                    step="1"
+                    value={subtitleBottomPercent}
+                    onChange={(e) => handleBottomPercentChange(parseInt(e.target.value, 10))}
+                    className="flex-1 accent-amber-500 h-1.5 bg-slate-800 rounded-lg cursor-pointer"
+                  />
+                  <input
+                    type="number"
+                    min="12"
+                    max="35"
+                    value={subtitleBottomPercent}
+                    onChange={(e) => handleBottomPercentChange(parseInt(e.target.value, 10))}
+                    className="w-12 bg-slate-950 border border-slate-700 text-amber-400 font-mono text-xs text-center rounded px-1 py-0.5 outline-none focus:border-amber-500"
+                  />
+                </div>
+              </div>
+            </div>
 
             {/* Audio Settings */}
             <div className="space-y-4">

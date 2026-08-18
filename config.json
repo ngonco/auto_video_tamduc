@@ -2,27 +2,27 @@
   "appName": "Auto Video Tâm Đức",
   "version": "1.0.0",
   "defaults": {
-    "clipMinDuration": 3.0,
+    "clipMinDuration": 3,
     "clipMaxDuration": 4.5,
     "aspectRatio": "9:16",
     "width": 1080,
     "height": 1920,
     "fps": 30,
     "bgmVolume": 0.18,
-    "voiceVolume": 1.0,
+    "voiceVolume": 1,
     "audioDuckingVolume": 0.08,
     "defaultOutroPath": "E:\\Thanh Vi\\PAGE Không gian thờ\\brand\\outro 5.mp4",
     "outroEnabled": true,
     "outroDuration": 2.6,
     "karaoke": {
       "fontFamily": "Be Vietnam Pro",
-      "fontSize": 52,
+      "fontSize": 65,
       "inactiveColor": "#FFFFFF",
       "activeColor": "#FFD700",
       "strokeColor": "#000000",
-      "strokeWidth": 4,
+      "strokeWidth": 4.5,
       "shadowColor": "rgba(0, 0, 0, 0.85)",
-      "positionBottomPercent": 24
+      "positionBottomPercent": 22
     }
   },
   "storylineStages": [
@@ -30,7 +30,7 @@
       "id": "STAGE_1_RAW_CARPENTRY",
       "name": "Thi công thô & Gia công gỗ",
       "description": "Cảnh thợ mộc đóng tủ thờ, cắt xẻ gỗ, đánh ráp, dựng khung vách",
-      "targetRatio": 0.20
+      "targetRatio": 0.2
     },
     {
       "id": "STAGE_2_ASSEMBLY_FINISHING",
@@ -48,7 +48,9 @@
       "id": "STAGE_4_WORSHIP_ALTAR",
       "name": "Bật đèn lung linh & Lễ Phật trang nghiêm",
       "description": "Không gian thờ trang nghiêm hoàn thiện, đèn hào quang, thắp hương, chắp tay lễ Phật",
-      "targetRatio": 0.30
+      "targetRatio": 0.3
     }
-  ]
+  ],
+  "defaultOutroPath": "E:\\Thanh Vi\\PAGE Không gian thờ\\brand\\outro 5.mp4",
+  "outroEnabled": true
 }

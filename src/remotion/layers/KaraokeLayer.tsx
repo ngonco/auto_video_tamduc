@@ -7,6 +7,8 @@ interface KaraokeLayerProps {
   fontFamily?: string;
   activeColor?: string;
   inactiveColor?: string;
+  fontSize?: number;
+  positionBottomPercent?: number;
 }
 
 export const KaraokeLayer: React.FC<KaraokeLayerProps> = ({
@@ -14,10 +16,16 @@ export const KaraokeLayer: React.FC<KaraokeLayerProps> = ({
   fontFamily = 'Be Vietnam Pro',
   activeColor = '#FFD700',
   inactiveColor = '#FFFFFF',
+  fontSize = 65,
+  positionBottomPercent = 22,
 }) => {
   const frame = useCurrentFrame();
   const { fps, width } = useVideoConfig();
   const currentTime = frame / fps;
+
+  // Tính độ dày viền chữ tỉ lệ theo cỡ chữ (khoảng 7% cỡ chữ, tối thiểu 3px)
+  const strokeWidth = Math.max(3, Math.round(fontSize * 0.07 * 10) / 10);
+  const activeStrokeWidth = Math.round((strokeWidth + 0.5) * 10) / 10;
 
   // Tìm câu phụ đề đang hiển thị
   const activeLine = subtitles.find(
@@ -32,7 +40,7 @@ export const KaraokeLayer: React.FC<KaraokeLayerProps> = ({
     <div
       style={{
         position: 'absolute',
-        bottom: '22%', // Vùng an toàn 9:16 Safe Zone
+        bottom: `${positionBottomPercent}%`, // Vùng an toàn 9:16 Safe Zone
         left: 0,
         width: width,
         display: 'flex',
@@ -47,7 +55,7 @@ export const KaraokeLayer: React.FC<KaraokeLayerProps> = ({
       <div
         style={{
           fontFamily: `"${fontFamily}", sans-serif`,
-          fontSize: 50,
+          fontSize: fontSize,
           fontWeight: 800,
           textAlign: 'center',
           lineHeight: 1.35,
@@ -66,16 +74,16 @@ export const KaraokeLayer: React.FC<KaraokeLayerProps> = ({
           let color = inactiveColor;
           let scale = 1;
           let shadow = '0 3px 12px rgba(0, 0, 0, 0.95)';
-          let stroke = '3px #000000';
+          let stroke = `${strokeWidth}px #000000`;
 
           if (isCurrent) {
             color = activeColor; // Vàng kim hoàng gia
-            scale = 1.1;
+            scale = 1.08;
             shadow = `0 0 20px rgba(255, 215, 0, 0.9), 0 3px 12px rgba(0, 0, 0, 0.95)`;
-            stroke = '3.5px #000000';
+            stroke = `${activeStrokeWidth}px #000000`;
           } else if (isPassed) {
             color = activeColor; // Vàng kim (đã hoàn thành karaoke)
-            stroke = '3.5px #000000';
+            stroke = `${strokeWidth}px #000000`;
           }
 
           return (

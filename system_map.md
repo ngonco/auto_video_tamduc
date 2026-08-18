@@ -116,13 +116,14 @@ Tổng thời lượng Video = Thời lượng Voice chính xác (T giây từ f
        + Chữ hiển thị: Viết IN HOA toàn bộ (UPPERCASE), trang nghiêm, dễ đọc.
        + Hiệu ứng Karaoke: Chữ chưa đọc màu Trắng (#FFFFFF / &H00FFFFFF), khi giọng đọc tới đâu đổi sang màu Vàng Kim (#FFD700 / &H0000D7FF) tới đó kèm viền đen 3.5px và đổ bóng sắc nét.
        + Font chữ chuẩn: Sử dụng bộ font Be Vietnam Pro (tích hợp trong assets/fonts/ và nạp vào FFmpeg qua tham số fontsdir).
-       + Vị trí & Kích thước: Căn lề đáy 22% (~420px từ đáy 1080x1920), cỡ chữ 50px chuẩn safe zone 9:16.
+       + Kích thước & Vị trí chuẩn: Mặc định cỡ chữ 65px (thay vì 50px cũ bị nhỏ), căn lề đáy 22% (~422px từ đáy 1080x1920) chuẩn safe zone 9:16.
+       + Tùy chỉnh trực quan & Ghi nhớ vĩnh viễn (Timeline Subtitle Controls): Bộ thanh trượt điều chỉnh Cỡ chữ (40px - 90px) và Vị trí lề đáy (12% - 35%) ngay trên Bảng điều khiển Timeline Editor; cập nhật trực tiếp thời gian thực trên Preview và tự động lưu vào localStorage / render payload để video xuất ra khớp tuyệt đối 1:1.
        + Xử lý khoảng lặng: Tự động chèn thẻ {\k<gap>} trong file ASS để khớp tuyệt đối từng nhịp ngắt nghỉ của giọng Voice.
   3. Chuẩn hóa Danh xưng Phật giáo: Tự động viết hoa các danh từ tôn kính (Phật, Đức Phật, Tam Bảo, Bồ Tát, Thế Tôn, Như Lai, Bổn Sư, Thích Ca, Quán Thế Âm, A Di Đà, Chư Phật, Gia Hộ, Cúng Dường, Phụng Sự...) và giữ chữ thường cho các liên từ nối.
   4. Storyline & Clip Duration Engine (Chuẩn 4.0s - 5.5s):
      - Mọi video nguồn dài (30s, 60s,...) khi nạp vào timeline đều được tự động bóc tách thành các phân đoạn 4.0s - 5.5s.
      - Thuật toán tịnh tiến `sourceStart` lấy các góc quay mới liên tục trong video gốc, không bị lặp hình.
-     - Trên Timeline Editor: Khi xóa clip, hệ thống kích hoạt `rebalanceTimelineClips` tự bù clip từ nguồn công trình để giữ thời lượng mọi clip luôn là 4-6s (kèm nút 1-click "Cắt Chuẩn 4-6s").
+     - Trên Timeline Editor: Khi xóa clip hoặc bấm "Cắt Chuẩn 4-6s", hệ thống kích hoạt `rebalanceClips` và `recalcTimelinePositions` tự cân bằng và phân bổ lại các clip thân chính xác trong phạm vi thời lượng Voice (0 -> voiceDuration); khối Outro nằm riêng biệt từ voiceDuration -> totalDuration, đảm bảo thanh playhead chạm đúng khối Outro ngay khi video preview bắt đầu phát Outro.
   5. Remotion Player Preview: Sử dụng thẻ <Video> chuẩn Remotion với giải mã phần cứng GPU (Hardware Acceleration) kết hợp <Sequence> độc lập cho từng clip kèm startFrom={clip.sourceStart * fps} để preview siêu mượt 60fps, loại bỏ hoàn toàn tình trạng giựt hình do Canvas seek.
   6. Timeline Zoom & Fit Engine: Dải Zoom mở rộng 0.05x -> 6.0x, nút "Fit Toàn Bộ" tính toán chính xác tỷ lệ màn hình để hiển thị trọn vẹn toàn bộ timeline mà không bị thanh cuộn ngang, thẻ clip co giãn mượt mà.
   7. FFmpeg Render: Kích hoạt -stream_loop -1 cho video clips ngắn để không bị hụt khung hình; thêm tpad=stop_mode=clone để giữ khung hình cuối trang nghiêm đến khi dứt tiếng.
@@ -261,7 +262,7 @@ CREATE TABLE voices (
 | `POST` | `/api/generator/process-voice` | `{ filePath, duration }` | Nhận diện STT Whisper + Gemini sửa phụ đề Phật học & tự động lưu lịch sử |
 | `POST` | `/api/generator/assemble-storyline`| `{ voiceDuration, projectId, outro? }` | Tự động phân bổ clip 4 giai đoạn khớp thời lượng Voice (kèm cấu hình Outro) |
 | `GET` | `/api/generator/bgm-list` | - | Lấy danh sách nhạc thiền BGM |
-| `POST` | `/api/render/start` | `{ videoId, projectName, voicePath, clips, subtitles, outroPath, outroEnabled, outroDuration }` | Bắt đầu Render video MP4 1080x1920 qua FFmpeg (kèm Outro unmuted audio & BGM fade-out) |
+| `POST` | `/api/render/start` | `{ videoId, projectName, voicePath, clips, subtitles, subtitleFontSize?, subtitleBottomPercent?, outroPath, outroEnabled, outroDuration }` | Bắt đầu Render video MP4 1080x1920 qua FFmpeg (kèm đồng bộ size phụ đề ASS & Outro unmuted audio & BGM fade-out) |
 | `GET` | `/api/render/status/:jobId` | - | Lấy tiến độ % render (0 - 100%) và đường dẫn file output chính xác |
 | `POST` | `/api/render/open-folder` | `{ filePath: string }` | Mở thư mục chứa video trên Windows Explorer (và tự động highlight chọn file video vừa xuất) |
 | `POST` | `/api/render/open-video` | `{ filePath: string }` | Mở phát video trực tiếp bằng ứng dụng xem video mặc định của Windows |
