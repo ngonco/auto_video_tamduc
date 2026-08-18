@@ -18,10 +18,7 @@
   - Phụ đề Karaoke tiếng Việt đổi màu vàng kim từng từ theo thời gian thực (chuẩn mốc thời gian, không lỗi font).
   - **Hiệu ứng chuyển cảnh Cross Dissolve (0.5s)** hòa tan mượt mà giữa các clip (loại bỏ cắt đột ngột).
   - **Hiệu ứng Zoom nhẹ (Ken Burns scale 1.0x -> 1.10x)** tạo chuyển động sống động cho media là ảnh tĩnh.
-  - Xử lý mượt mà clip/ảnh ngang 16:9 với nền mờ ảo (Blurred Backdrop).
-  - Timeline tương tác trực quan Remotion Player cho phép xem trước, kéo thả đổi clip và sửa chữ phụ đề.
-
----
+  - Timeline tương tác trực quan Remotion Player: Zoom mượt (Ctrl+Scroll native + nút +/-), Pan (Shift+Drag / middle click), Drag-and-drop kéo thả đổi vị trí clip siêu nhạy (@dnd-kit MouseSensor + DragOverlay), Playhead đỏ đồng bộ Player, Click ruler seek, Phụ đề căn chuẩn Absolute Position theo đúng mốc thời gian Voice (giữ nguyên khoảng lặng/pause).
 
 ## 2. BẢN ĐỒ THÀNH PHẦN HỆ THỐNG (SYSTEM COMPONENT MAP)
 
@@ -39,8 +36,8 @@
   ├── Watcher Module         (server/watcher.ts)                : Chokidar theo dõi Folder Source (Video + Ảnh)
   ├── Frame Extractor        (server/services/ffmpeg.ts)        : Trích frame JPEG 720p / thumbnail từ video và ảnh
   ├── Vision Analyzer        (server/services/vision-analyzer.ts): Phân loại 4 giai đoạn bằng ts/gemini-3.1-flash-lite
-  ├── STT Whisper Engine     (server/services/stt-service.ts)   : Nhận diện tiếng Việt bóc word timestamps
-  ├── Subtitle Fixer LLM     (server/services/subtitle-fixer.ts): Chuẩn hóa từ ngữ Phật học & ngắt nhịp 9:16
+  ├── STT Whisper Engine     (server/services/stt-service.ts)   : Nhận diện tiếng Việt bóc word timestamps (response.words + seg.words)
+  ├── Subtitle Sync Engine   (server/services/subtitle-fixer.ts): Phân đoạn phụ đề 9:16 bảo toàn 100% từ ngữ & mốc thời gian Voice, chuẩn hóa danh xưng Phật học & ngữ pháp tiếng Việt
   ├── Storyline Engine       (server/services/storyline-engine.ts): Phân bổ clip/ảnh 4 giai đoạn theo thời lượng Voice
   └── Render Service         (server/services/render-service.ts): Render MP4 1080x1920 (Cross Dissolve + Image Zoom + ASS Karaoke)
 -------------------------------------------------------------------------------------------------------
@@ -73,40 +70,39 @@ Tất cả các dịch vụ AI kết nối qua API Gateway chuẩn OpenAI SDK (`
 
 ---
 
-## 4. QUY TRÌNH 4 GIAI ĐOẠN & HIỆU ỨNG HÌNH ẢNH (STORYLINE & VISUAL EFFECTS)
+## 4. QUY TRÌNH 4 GIAI ĐOẠN & ĐỒNG BỘ VIDEO - VOICE (STORYLINE & VISUAL EFFECTS)
 
-Mỗi clip được cắt ngắn **3.0s - 4.5s** và phân bổ theo tiến trình thời gian thi công bàn thờ:
+Mỗi clip được cắt ngắn **4.0s - 5.5s** và phân bổ tịnh tiến theo tỷ lệ phần trăm thời gian của Voice đọc:
 
 ```
-Tổng thời lượng Video = Thời lượng Voice (T giây)
+Tổng thời lượng Video = Thời lượng Voice chính xác (T giây từ ffprobe)
 
-[GIAI ĐOẠN 1: THI CÔNG THÔ] (15% - 20% đầu)
+[GIAI ĐOẠN 1: THI CÔNG THÔ] (0% - 20% đầu video)
 - Tag: STAGE_1_RAW_CARPENTRY
 - Nội dung: Thợ mộc làm gỗ, cắt xẻ, đánh nhám ráp, dựng khung tủ thờ thô.
 
-[GIAI ĐOẠN 2: LẮP RÁP HOÀN THIỆN] (25% - 30% tiếp theo)
+[GIAI ĐOẠN 2: LẮP RÁP HOÀN THIỆN] (20% - 50% tiếp theo)
 - Tag: STAGE_2_ASSEMBLY_FINISHING
 - Nội dung: Lắp ráp tủ thờ vào không gian phòng thờ, gắn vách ngăn CNC, lau dọn.
 
-[GIAI ĐOẠN 3: CẮM HOA & TRANG TRÍ] (25% - 30% tiếp theo)
+[GIAI ĐOẠN 3: CẮM HOA & TRANG TRÍ] (50% - 75% tiếp theo)
 - Tag: STAGE_3_DECOR_FLOWERS
 - Nội dung: Cắm hoa sen, hoa huệ, bày biện lư hương đồng, mâm bồng, chỉnh trang tượng Phật.
 
-[GIAI ĐOẠN 4: ĐÈN HÀO QUANG & LỄ PHẬT TRANG NGHIÊM] (25% - 30% cuối)
+[GIAI ĐOẠN 4: ĐÈN HÀO QUANG & LỄ PHẬT TRANG NGHIÊM] (75% - 100% kết thúc)
 - Tag: STAGE_4_WORSHIP_ALTAR
 - Nội dung: Bật đèn hào quang sáng rực, toàn cảnh không gian thờ thanh tịnh, chắp tay lễ Phật.
 
-* Quy Tắc Chuyển Cảnh (Cross Dissolve):
-  - Thời lượng hòa tan: 0.5s giữa mọi clip liền kề.
-  - Remotion Player: Render lớp dưới và lớp trên với opacity nội suy mượt mà.
-  - FFmpeg Engine: Chuỗi bộ lọc `xfade=transition=fade:duration=0.5:offset=...`.
-
-* Quy Tắc Media là Ảnh Tĩnh (Ken Burns Zoom):
-  - Ảnh dọc 9:16: Zoom nhẹ từ tâm (scale 1.0x -> 1.10x) trong suốt thời lượng hiển thị clip.
-  - Ảnh ngang 16:9: Nền mờ phóng to nhẹ + Ảnh nét trung tâm zoom nhẹ.
-
-* Quy Tắc 9:16 Cho Clip Ngang 16:9:
-  - Nền mờ (Blurred Backdrop) 1080x1920 + clip chính nét ở giữa khung hình.
+* Quy Tắc Đồng Bộ Thời Gian & Tránh Lệch / Thiếu Video & Phụ Đề So Với Voice:
+  1. Thời lượng Voice: Luôn đo đạc bằng ffprobe (VideoMetadata) để lấy chính xác 100% độ dài audio, không bị cụt đuôi do khoảng lặng cuối câu.
+  2. Phân đoạn Phụ đề (Subtitle Sync Engine): Phân dòng trực tiếp từ chuỗi KaraokeWord[] của Whisper, bảo toàn 100% từ ngữ gốc, mốc thời gian start-end của từng từ và không bao giờ bị cắt ngắn hay kết thúc trước Voice. Ngắt dòng thông minh 3-6 từ theo khoảng lặng âm thanh (>= 0.3s), dấu câu và từ nối tiếng Việt.
+  3. Chuẩn hóa Danh xưng Phật giáo: Tự động viết hoa các danh từ tôn kính (Phật, Đức Phật, Tam Bảo, Bồ Tát, Thế Tôn, Như Lai, Bổn Sư, Thích Ca, Quán Thế Âm, A Di Đà, Chư Phật, Gia Hộ, Cúng Dường, Phụng Sự...) và giữ chữ thường cho các liên từ nối.
+  4. Remotion Player Preview: Sử dụng <Sequence> độc lập cho từng clip kèm startFrom={clip.sourceStart * fps} để preview mượt mà, không bị dừng hình hay lệch mốc thời gian.
+  5. FFmpeg Render: Kích hoạt -stream_loop -1 cho video clips ngắn để không bị hụt khung hình; thêm tpad=stop_mode=clone để giữ khung hình cuối trang nghiêm đến khi dứt tiếng.
+  6. Hiệu ứng Chuyển cảnh (Cross Dissolve): 0.5s hòa tan mượt mà giữa các clip liền kề.
+  7. Media Ảnh tĩnh: Zoom nhẹ Ken Burns từ tâm (scale 1.0x -> 1.10x).
+  8. Media Ngang 16:9: Nền mờ 1080x1920 + media chính nét ở giữa khung hình.
+  9. Tắt tuyệt đối âm thanh gốc của footage (Mute 100%): Cả Remotion Preview (volume=0, muted) và FFmpeg Engine (.noAudio()) chỉ phát duy nhất Voice đọc tiếng Việt + Nhạc thiền BGM.
 ```
 
 
@@ -154,7 +150,19 @@ CREATE TABLE generated_videos (
     voice_path TEXT,
     voice_duration REAL DEFAULT 0,
     output_path TEXT,
--- 4. Bảng ghi nhớ danh sách Voice đã nạp (Lịch sử Voice)
+    status TEXT DEFAULT 'draft', -- 'draft', 'rendering', 'completed', 'error'
+    timeline_data_json TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 4. Bảng lưu cấu hình người dùng
+CREATE TABLE system_settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 5. Bảng ghi nhớ danh sách Voice đã nạp (Lịch sử Voice)
 CREATE TABLE voices (
     id TEXT PRIMARY KEY,
     file_name TEXT NOT NULL,
@@ -193,6 +201,7 @@ CREATE TABLE voices (
 | `POST` | `/api/settings` | Lưu cấu hình 3 API Key .env / config.json |
 | `POST` | `/api/settings/browse-folder` | Mở hộp thoại FolderBrowserDialog của Windows |
 | `GET` | `/media/stream?path=...` | Stream video & audio hỗ trợ HTTP Range header cho Preview Player |
+| `GET` | `/api/health` | Kiểm tra trạng thái hoạt động backend |
 
 ---
 
@@ -216,11 +225,13 @@ Auto_Video_TamDuc/
 │   │   ├── library.routes.ts   # Quản lý công trình & scan
 │   │   ├── generator.routes.ts # STT, Sửa phụ đề, Sinh kịch bản
 │   │   ├── render.routes.ts    # Render MP4 1080x1920
+│   │   └── settings.routes.ts  # Quản lý API Key, Base URL, Thư mục Source & Exports
 │   ├── utils/
-│   │   └── picker.ps1          # Script mở hộp thoại chọn thư mục Windows hỗ trợ Quick Access & Pinned
+│   │   ├── picker.ps1          # Hộp thoại chọn thư mục Windows (Folder Browser)
+│   │   └── audio-picker.ps1    # Hộp thoại chọn file Voice âm thanh (.mp3, .wav, .m4a)
 │   └── services/
 │       ├── api-client.ts       # OpenAI SDK trỏ https://api.vilao.ai/v1
-│       ├── ffmpeg.ts           # Trích 2-3 frame JPEG, lấy metadata
+│       ├── ffmpeg.ts           # Trích frame JPEG 720p, thumbnail, metadata
 │       ├── stt-service.ts      # tsa/groq/whisper-large-v3
 │       ├── subtitle-fixer.ts   # ts/gemini-3.1-flash-lite
 │       ├── vision-analyzer.ts  # Phân tích 4 giai đoạn bằng Gemini

@@ -57,7 +57,7 @@ export async function transcribeAudio(audioFilePath: string): Promise<STTResult>
 
     let words: KaraokeWord[] = [];
 
-    // 1. Kiểm tra nếu có mảng words trực tiếp
+    // 1. Kiểm tra nếu có mảng words trực tiếp ở root
     if (Array.isArray(response.words) && response.words.length > 0) {
       words = response.words
         .map((w: any) => ({
@@ -68,25 +68,39 @@ export async function transcribeAudio(audioFilePath: string): Promise<STTResult>
         .filter((w: KaraokeWord) => w.word.length > 0);
     }
 
-    // 2. Nếu không có words, tổng hợp từ segments
-    if (words.length === 0 && Array.isArray(response.segments)) {
+    // 2. Nếu không có words ở root, kiểm tra seg.words trong từng segment
+    if (words.length === 0 && Array.isArray(response.segments) && response.segments.length > 0) {
       for (const seg of response.segments) {
-        const rawTokens = (seg.text || '').trim().split(/\s+/).filter(Boolean);
-        if (rawTokens.length === 0) continue;
+        if (Array.isArray(seg.words) && seg.words.length > 0) {
+          for (const sw of seg.words) {
+            const wText = (sw.word || '').trim();
+            if (wText) {
+              words.push({
+                word: wText,
+                start: Number(sw.start) || 0,
+                end: Number(sw.end) || 0,
+              });
+            }
+          }
+        } else {
+          // Fallback: Nội suy từ trong phân đoạn segment
+          const rawTokens = (seg.text || '').trim().split(/\s+/).filter(Boolean);
+          if (rawTokens.length === 0) continue;
 
-        const segStart = Number(seg.start) || 0;
-        const segEnd = Number(seg.end) || (segStart + 1.0);
-        const segDuration = Math.max(0.1, segEnd - segStart);
-        const wordDur = segDuration / rawTokens.length;
+          const segStart = Number(seg.start) || 0;
+          const segEnd = Number(seg.end) || (segStart + 1.0);
+          const segDuration = Math.max(0.1, segEnd - segStart);
+          const wordDur = segDuration / rawTokens.length;
 
-        for (let i = 0; i < rawTokens.length; i++) {
-          const wStart = Number((segStart + i * wordDur).toFixed(2));
-          const wEnd = Number((segStart + (i + 1) * wordDur).toFixed(2));
-          words.push({
-            word: rawTokens[i],
-            start: wStart,
-            end: wEnd,
-          });
+          for (let i = 0; i < rawTokens.length; i++) {
+            const wStart = Number((segStart + i * wordDur).toFixed(2));
+            const wEnd = Number((segStart + (i + 1) * wordDur).toFixed(2));
+            words.push({
+              word: rawTokens[i],
+              start: wStart,
+              end: wEnd,
+            });
+          }
         }
       }
     }

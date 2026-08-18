@@ -10,7 +10,7 @@ export interface SubtitleLine {
 }
 
 /**
- * Danh từ riêng và danh xưng tôn kính trong Phật giáo bắt buộc viết hoa
+ * Danh từ riêng, danh xưng tôn kính và thuật ngữ Phật giáo bắt buộc viết hoa chuẩn mực
  */
 const BUDDHIST_TERMS_MAP = new Map<string, string>([
   ['phật', 'Phật'],
@@ -36,10 +36,24 @@ const BUDDHIST_TERMS_MAP = new Map<string, string>([
   ['tịnh độ', 'Tịnh Độ'],
   ['hộ pháp', 'Hộ Pháp'],
   ['thiện thần', 'Thiện Thần'],
+  ['gia hộ', 'Gia Hộ'],
+  ['cúng dường', 'Cúng Dường'],
+  ['phụng sự', 'Phụng Sự'],
+  ['công đức', 'Công Đức'],
+  ['phước báu', 'Phước Báu'],
+  ['trang nghiêm', 'Trang Nghiêm'],
 ]);
 
 /**
- * Các từ liên từ, trợ từ, động từ thường ở giữa câu bắt buộc viết thường nếu không phải đầu câu mới
+ * Sửa lỗi chính tả / nhận diện sai âm thường gặp trong khẩu ngữ tiếng Việt
+ */
+const SPELLING_CORRECTIONS = new Map<string, string>([
+  ['dân', 'dâng'],      // dân lên -> dâng lên
+  ['lật đặt', 'lật đật'], // lật đặt -> lật đật
+]);
+
+/**
+ * Các liên từ, trợ từ, động từ thường ở giữa câu bắt buộc viết thường nếu không phải mở đầu câu mới
  */
 const CONTINUATION_WORDS = new Set<string>([
   'nhưng', 'để', 'mà', 'thì', 'là', 'của', 'cái', 'cho', 'với', 'và', 'hoặc',
@@ -51,226 +65,183 @@ const CONTINUATION_WORDS = new Set<string>([
 ]);
 
 /**
- * Bộ lọc Rule-based hậu kỳ: Chuẩn hóa chữ hoa / chữ thường theo đúng ngữ pháp tiếng Việt & Phật học
+ * Các từ thường mở đầu vế câu mới trong khẩu ngữ tiếng Việt
  */
-function sanitizeSubtitleGrammar(lines: SubtitleLine[]): SubtitleLine[] {
+const CLAUSE_STARTER_WORDS = new Set<string>([
+  'thì', 'nhưng', 'và', 'hoặc', 'để', 'mà', 'cho', 'với', 'khi', 'nếu',
+  'bởi', 'vì', 'do', 'tuy', 'nên', 'rồi', 'nhớ', 'tự', 'hãy', 'chúng', 'mình'
+]);
+
+/**
+ * Các từ không nên đứng trơ trọi ở cuối dòng nếu dòng đã đủ dài
+ */
+const HANGING_END_WORDS = new Set<string>([
+  'thì', 'là', 'và', 'hoặc', 'của', 'để', 'mà', 'với', 'trong', 'ở', 'từ', 'có', 'cho'
+]);
+
+function formatWord(rawWord: string, isStartOfSentence: boolean, isFirstWordInLine: boolean): string {
+  let cleanWord = rawWord.replace(/[,.;:!?]+$/, '');
+  let lower = cleanWord.toLowerCase();
+
+  // Sửa lỗi chính tả âm
+  if (SPELLING_CORRECTIONS.has(lower)) {
+    lower = SPELLING_CORRECTIONS.get(lower)!;
+  }
+
+  // Danh từ tôn kính Phật giáo
+  if (BUDDHIST_TERMS_MAP.has(lower)) {
+    return BUDDHIST_TERMS_MAP.get(lower)!;
+  }
+
+  // Viết hoa đầu câu
+  if (isStartOfSentence && isFirstWordInLine) {
+    return lower.charAt(0).toUpperCase() + lower.slice(1);
+  }
+
+  return lower;
+}
+
+/**
+ * Phân đoạn phụ đề 9:16 thông minh & bảo toàn 100% từ ngữ và mốc thời gian của Voice
+ * Đảm bảo:
+ * 1. Không bị mất từ, không bị rút ngắn, không kết thúc trước Voice
+ * 2. Ngắt dòng 3-6 từ tối ưu cho khung hình dọc 9:16
+ * 3. Đồng bộ chuẩn xác tuyệt đối từng từ (Karaoke Word Timestamps)
+ */
+export function segmentAndPolishSubtitles(rawWords: KaraokeWord[]): SubtitleLine[] {
+  if (!rawWords || rawWords.length === 0) {
+    return [];
+  }
+
+  const rawChunks: KaraokeWord[][] = [];
+  let currentChunk: KaraokeWord[] = [];
+
+  for (let i = 0; i < rawWords.length; i++) {
+    const wordObj = rawWords[i];
+    currentChunk.push(wordObj);
+
+    const isLastWord = i === rawWords.length - 1;
+    if (isLastWord) {
+      rawChunks.push(currentChunk);
+      break;
+    }
+
+    const nextWordObj = rawWords[i + 1];
+    const nextWordClean = nextWordObj.word.trim().toLowerCase().replace(/[,.;:!?]+$/, '');
+    const pauseGap = nextWordObj.start - wordObj.end;
+    const rawWordText = wordObj.word.trim();
+    const cleanWordText = rawWordText.toLowerCase().replace(/[,.;:!?]+$/, '');
+    const hasComma = /[,;:]$/.test(rawWordText);
+    const hasSentenceEnd = /[.!?]$/.test(rawWordText);
+
+    // Tiêu chí 1: Dấu kết thúc câu (. ! ?) -> ngắt dòng nếu dòng >= 2 từ
+    if (hasSentenceEnd && currentChunk.length >= 2) {
+      rawChunks.push(currentChunk);
+      currentChunk = [];
+      continue;
+    }
+
+    // Tiêu chí 2: Khoảng lặng âm thanh rõ rệt (pauseGap >= 0.30s) -> ngắt dòng nếu dòng >= 2 từ
+    if (pauseGap >= 0.30 && currentChunk.length >= 2) {
+      rawChunks.push(currentChunk);
+      currentChunk = [];
+      continue;
+    }
+
+    // Tiêu chí 3: Dấu phẩy -> ngắt dòng nếu đã có ít nhất 3 từ
+    if (hasComma && currentChunk.length >= 3) {
+      rawChunks.push(currentChunk);
+      currentChunk = [];
+      continue;
+    }
+
+    // Tiêu chí 4: Từ kế tiếp là từ mở đầu vế câu mới (thì, nhưng, để, và...) và dòng hiện tại đã đủ 3-4 từ
+    if (currentChunk.length >= 3 && CLAUSE_STARTER_WORDS.has(nextWordClean) && !HANGING_END_WORDS.has(cleanWordText)) {
+      rawChunks.push(currentChunk);
+      currentChunk = [];
+      continue;
+    }
+
+    // Tiêu chí 5: Dòng đã đạt 5 từ và không kết thúc bằng từ treo
+    if (currentChunk.length >= 5 && !HANGING_END_WORDS.has(cleanWordText)) {
+      rawChunks.push(currentChunk);
+      currentChunk = [];
+      continue;
+    }
+
+    // Tiêu chí 6: Giới hạn tối đa 6 từ để không bị tràn dòng 9:16
+    if (currentChunk.length >= 6) {
+      rawChunks.push(currentChunk);
+      currentChunk = [];
+      continue;
+    }
+  }
+
+  // Xử lý dòng cuối cùng nếu bị quá ngắn (1-2 từ) -> gộp vào dòng trước để tránh cụt câu
+  if (rawChunks.length > 1) {
+    const lastChunk = rawChunks[rawChunks.length - 1];
+    if (lastChunk.length <= 2) {
+      const prevChunk = rawChunks[rawChunks.length - 2];
+      if (prevChunk.length + lastChunk.length <= 7) {
+        rawChunks[rawChunks.length - 2] = [...prevChunk, ...lastChunk];
+        rawChunks.pop();
+      }
+    }
+  }
+
+  // Chuẩn hóa ngữ pháp & chính tả Phật giáo cho từng dòng
   let isStartOfSentence = true;
-
-  return lines.map((line, lineIdx) => {
-    let rawText = (line.text || '').trim().replace(/[,.;:!?]+$/, '');
-    let tokens = rawText.split(/\s+/).filter(Boolean);
-
-    if (tokens.length === 0) return line;
-
-    const firstWordLower = tokens[0].toLowerCase();
-    
-    // Nếu dòng bắt đầu bằng liên từ nối hoặc trợ từ nối tiếp, chắc chắn không phải mở đầu câu mới
+  const lines: SubtitleLine[] = rawChunks.map((chunk, lineIdx) => {
+    const firstWordClean = chunk[0].word.replace(/[,.;:!?]+$/, '').toLowerCase();
     let lineStartsNewSentence = isStartOfSentence;
-    if (lineIdx > 0 && CONTINUATION_WORDS.has(firstWordLower)) {
+    if (lineIdx > 0 && CONTINUATION_WORDS.has(firstWordClean)) {
       lineStartsNewSentence = false;
     }
 
-    const formattedTokens = tokens.map((token, idx) => {
-      const lower = token.toLowerCase();
-
-      // 1. Luôn viết hoa danh từ tôn kính Phật giáo
-      if (BUDDHIST_TERMS_MAP.has(lower)) {
-        return BUDDHIST_TERMS_MAP.get(lower)!;
-      }
-
-      // 2. Viết hoa chữ cái đầu tiên nếu là từ mở đầu câu mới
-      if (idx === 0 && lineStartsNewSentence) {
-        return lower.charAt(0).toUpperCase() + lower.slice(1);
-      }
-
-      // 3. Toàn bộ các từ còn lại trong câu đều viết thường
-      return lower;
+    const formattedWords: KaraokeWord[] = chunk.map((w, idx) => {
+      const formatted = formatWord(w.word, lineStartsNewSentence, idx === 0);
+      return {
+        word: formatted,
+        start: w.start,
+        end: w.end,
+      };
     });
 
-    // Xác định trạng thái cho dòng tiếp theo
-    const originalEndsWithPunctuation = /[.!?]$/.test(line.text.trim());
-    if (originalEndsWithPunctuation) {
+    const lineText = formattedWords.map((w) => w.word).join(' ');
+    const lineStart = formattedWords[0].start;
+    const lineEnd = formattedWords[formattedWords.length - 1].end;
+
+    const lastRawWord = chunk[chunk.length - 1].word;
+    const endsWithSentencePunct = /[.!?]$/.test(lastRawWord.trim());
+    if (endsWithSentencePunct) {
       isStartOfSentence = true;
     } else {
       isStartOfSentence = false;
     }
 
-    const cleanText = formattedTokens.join(' ');
-
-    // Đồng bộ lại từng từ đơn lẻ trong words array để làm hiệu ứng Karaoke
-    const originalWords = line.words || [];
-    const updatedWords = originalWords.map((w, idx) => {
-      const formattedWord = formattedTokens[idx] || w.word;
-      return {
-        ...w,
-        word: formattedWord,
-      };
-    });
-
     return {
-      ...line,
-      text: cleanText,
-      words: updatedWords,
+      id: `line_${lineIdx + 1}`,
+      start: lineStart,
+      end: lineEnd,
+      text: lineText,
+      words: formattedWords,
     };
   });
+
+  return lines;
 }
 
 /**
- * Căn chỉnh mảng dòng chuỗi phân đoạn từ AI với mốc thời gian chi tiết từng từ từ Whisper
- */
-function alignLinesWithTimestamps(formattedLines: string[], rawWords: KaraokeWord[]): SubtitleLine[] {
-  let wordPointer = 0;
-  const result: SubtitleLine[] = [];
-
-  for (let lIdx = 0; lIdx < formattedLines.length; lIdx++) {
-    const lineText = formattedLines[lIdx].trim().replace(/[,.;:!?]+$/, '');
-    const tokens = lineText.split(/\s+/).filter(Boolean);
-    if (tokens.length === 0) continue;
-
-    const lineWords: KaraokeWord[] = [];
-    for (let tIdx = 0; tIdx < tokens.length; tIdx++) {
-      let rawW = rawWords[wordPointer];
-      if (!rawW) {
-        const prevW = rawWords[rawWords.length - 1];
-        rawW = {
-          word: tokens[tIdx],
-          start: prevW ? prevW.end : 0,
-          end: prevW ? prevW.end + 0.3 : 0.3,
-        };
-      } else {
-        wordPointer++;
-      }
-
-      lineWords.push({
-        word: tokens[tIdx],
-        start: rawW.start,
-        end: rawW.end,
-      });
-    }
-
-    const start = lineWords[0].start;
-    const end = lineWords[lineWords.length - 1].end;
-
-    result.push({
-      id: `line_${lIdx + 1}`,
-      text: lineText,
-      start,
-      end,
-      words: lineWords,
-    });
-  }
-
-  return sanitizeSubtitleGrammar(result);
-}
-
-/**
- * Sử dụng LLM ts/gemini-3.1-flash-lite + Bộ lọc Rule-based để ngắt dòng và chuẩn hóa chính tả Phật học
+ * Xử lý chuẩn hóa và ngắt dòng phụ đề chuẩn cho toàn hệ thống
  */
 export async function polishAndSegmentSubtitles(
-  rawText: string,
+  _rawText: string,
   rawWords: KaraokeWord[]
 ): Promise<SubtitleLine[]> {
   if (!rawWords || rawWords.length === 0) {
     return [];
   }
 
-  if (rawWords.length <= 5) {
-    const singleLine: SubtitleLine = {
-      id: 'sub_1',
-      start: rawWords[0].start,
-      end: rawWords[rawWords.length - 1].end,
-      text: rawWords.map((w) => w.word).join(' '),
-      words: rawWords,
-    };
-    return sanitizeSubtitleGrammar([singleLine]);
-  }
-
-  const prompt = `
-Bạn là chuyên gia ngôn ngữ tiếng Việt và Phật học.
-Nhiệm vụ: Hãy chia đoạn văn bản sau thành các câu phụ đề ngắn (3 đến 6 từ mỗi dòng) để hiển thị trên video dọc 9:16 (TikTok/Reels).
-
-QUY TẮC BẮT BUỘC:
-1. CHỈ VIẾT HOA chữ cái đầu tiên của câu mới hoàn chỉnh.
-2. Các dòng phụ đề là phần nối tiếp của câu BẮT BUỘC viết thường chữ cái đầu dòng (ví dụ: dòng 1 "Trước khi ngồi thiền", dòng 2 "cứ nên đến lễ Phật", dòng 3 "tùy thời gian của mình có").
-3. TUYỆT ĐỐI KHÔNG viết hoa các liên từ/từ thường ở giữa câu: nhưng, để, mà, thì, là, của, cái, cho, với, và, trong, ở, từ, nếu, khi, sau, tùy, có, không, được, điều, gì, ít, nhiều, thời, gian, ta, mình...
-4. LUÔN VIẾT HOA các danh từ tôn kính Phật giáo: Phật, Đức Phật, Bồ Tát, Tam Bảo, Thế Tôn, Như Lai, Bổn Sư, Thích Ca, Quán Thế Âm, A Di Đà, Chư Phật...
-5. KHÔNG để dấu chấm (.) hoặc phẩy (,) ở cuối dòng phụ đề.
-
-ĐOẠN VĂN BẢN ĐẦU VÀO:
-"${rawText}"
-
-YÊU CẦU ĐẦU RA:
-Trả về DUY NHẤT một mảng JSON các chuỗi:
-[
-  "Trước khi ngồi thiền",
-  "cứ nên đến lễ Phật",
-  "lễ ít hay lễ nhiều",
-  "tùy thời gian của mình có",
-  "nhưng phải lễ Phật",
-  "để cầu Phật gia hộ"
-]
-`;
-
-  try {
-    const rawRes = await callVilaoChatCompletion({
-      model: AI_MODELS.SUBTITLE_FIX,
-      serviceType: 'SUBTITLE',
-      messages: [{ role: 'user', content: prompt }],
-      temperature: 0.1,
-    });
-
-    let jsonStr = rawRes.trim();
-    if (jsonStr.startsWith('```')) {
-      jsonStr = jsonStr.replace(/^```[a-z]*\s*/i, '').replace(/\s*```$/, '');
-    }
-
-    let parsed = JSON.parse(jsonStr);
-    let lineStrings: string[] = [];
-
-    if (Array.isArray(parsed)) {
-      if (typeof parsed[0] === 'string') {
-        lineStrings = parsed;
-      } else if (typeof parsed[0] === 'object' && parsed[0].text) {
-        lineStrings = parsed.map((item: any) => item.text);
-      }
-    } else if (parsed && Array.isArray(parsed.lines)) {
-      lineStrings = parsed.lines.map((item: any) => typeof item === 'string' ? item : item.text);
-    }
-
-    if (lineStrings.length > 0) {
-      return alignLinesWithTimestamps(lineStrings, rawWords);
-    }
-
-    return fallbackGrouping(rawWords);
-  } catch (error) {
-    console.error('[SubtitleFixer] Error polishing subtitles with LLM, fallbacking:', error);
-    return fallbackGrouping(rawWords);
-  }
-}
-
-/**
- * Thuật toán gom dòng phụ đề dự phòng (Fallback) khi không gọi được LLM
- */
-function fallbackGrouping(rawWords: KaraokeWord[]): SubtitleLine[] {
-  const lines: SubtitleLine[] = [];
-  const WORDS_PER_LINE = 5;
-
-  for (let i = 0; i < rawWords.length; i += WORDS_PER_LINE) {
-    const chunk = rawWords.slice(i, i + WORDS_PER_LINE);
-    if (chunk.length === 0) continue;
-
-    const start = chunk[0].start;
-    const end = chunk[chunk.length - 1].end;
-    const text = chunk.map((w) => w.word).join(' ');
-
-    lines.push({
-      id: `line_${Math.floor(i / WORDS_PER_LINE) + 1}`,
-      start,
-      end,
-      text,
-      words: chunk,
-    });
-  }
-
-  return sanitizeSubtitleGrammar(lines);
+  // Sử dụng thuật toán phân đoạn trực tiếp từ rawWords để đảm bảo 100% mốc thời gian và không mất từ
+  return segmentAndPolishSubtitles(rawWords);
 }

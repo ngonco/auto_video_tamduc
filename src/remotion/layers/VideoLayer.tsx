@@ -1,5 +1,5 @@
 import React from 'react';
-import { useCurrentFrame, useVideoConfig, OffthreadVideo, Img } from 'remotion';
+import { Sequence, useCurrentFrame, useVideoConfig, interpolate, OffthreadVideo, Img } from 'remotion';
 import { TimelineClipItem } from '../types.js';
 
 interface VideoLayerProps {
@@ -13,29 +13,42 @@ function isImageFile(filePath: string): boolean {
   return ext ? IMAGE_EXTS.some((e) => e.endsWith(ext)) : false;
 }
 
-interface SingleClipMediaProps {
+interface SingleClipViewProps {
   clip: TimelineClipItem;
-  currentTime: number;
-  opacity: number;
+  durationFrames: number;
+  isFirst: boolean;
   width: number;
   height: number;
+  fps: number;
 }
 
-const SingleClipMedia: React.FC<SingleClipMediaProps> = ({
+const SingleClipView: React.FC<SingleClipViewProps> = ({
   clip,
-  currentTime,
-  opacity,
+  durationFrames,
+  isFirst,
   width,
   height,
+  fps,
 }) => {
+  const frame = useCurrentFrame();
   const isImage = clip.mediaType === 'image' || isImageFile(clip.filePath);
   const isHorizontal = clip.aspectRatioType === '16:9';
   const mediaSrc = `/media/stream?path=${encodeURIComponent(clip.filePath)}`;
 
-  // Tính toán tiến độ thời gian trong clip để làm hiệu ứng Zoom Ken Burns nhẹ cho ảnh (1.0x -> 1.10x)
-  const clipDuration = Math.max(0.1, clip.timelineEnd - clip.timelineStart);
-  const progress = Math.max(0, Math.min(1, (currentTime - clip.timelineStart) / clipDuration));
+  // Hiệu ứng Zoom nhẹ (Ken Burns scale 1.0x -> 1.10x) cho ảnh tĩnh
+  const progress = durationFrames > 0 ? Math.max(0, Math.min(1, frame / durationFrames)) : 0;
   const zoomScale = isImage ? 1.0 + 0.10 * progress : 1.0;
+
+  // Hiệu ứng Cross Dissolve chuyển cảnh: Fade in 0.5s (15 frames tại 30fps) ở đầu clip (trừ clip đầu tiên)
+  const transitionFrames = Math.min(Math.round(0.5 * fps), Math.floor(durationFrames / 2));
+  const opacity = isFirst
+    ? 1.0
+    : interpolate(frame, [0, Math.max(1, transitionFrames)], [0, 1], {
+        extrapolateLeft: 'clamp',
+        extrapolateRight: 'clamp',
+      });
+
+  const startFromFrame = Math.max(0, Math.round((clip.sourceStart || 0) * fps));
 
   return (
     <div
@@ -48,12 +61,11 @@ const SingleClipMedia: React.FC<SingleClipMediaProps> = ({
         opacity,
         overflow: 'hidden',
         backgroundColor: '#000000',
-        transition: 'opacity 0.05s ease-out',
       }}
     >
       {isHorizontal ? (
         <>
-          {/* Nền mờ (Blurred Backdrop) cho media ngang */}
+          {/* Nền mờ (Blurred Backdrop) 1080x1920 cho media ngang 16:9 */}
           <div
             style={{
               position: 'absolute',
@@ -78,6 +90,9 @@ const SingleClipMedia: React.FC<SingleClipMediaProps> = ({
             ) : (
               <OffthreadVideo
                 src={mediaSrc}
+                startFrom={startFromFrame}
+                volume={0}
+                muted
                 style={{
                   width: '100%',
                   height: '100%',
@@ -87,7 +102,7 @@ const SingleClipMedia: React.FC<SingleClipMediaProps> = ({
             )}
           </div>
 
-          {/* Media chính rõ nét ở giữa khung hình */}
+          {/* Media chính rõ nét ở giữa khung hình 9:16 */}
           <div
             style={{
               position: 'absolute',
@@ -114,6 +129,9 @@ const SingleClipMedia: React.FC<SingleClipMediaProps> = ({
             ) : (
               <OffthreadVideo
                 src={mediaSrc}
+                startFrom={startFromFrame}
+                volume={0}
+                muted
                 style={{
                   width: '100%',
                   objectFit: 'contain',
@@ -145,6 +163,9 @@ const SingleClipMedia: React.FC<SingleClipMediaProps> = ({
           ) : (
             <OffthreadVideo
               src={mediaSrc}
+              startFrom={startFromFrame}
+              volume={0}
+              muted
               style={{
                 width: '100%',
                 height: '100%',
@@ -159,10 +180,7 @@ const SingleClipMedia: React.FC<SingleClipMediaProps> = ({
 };
 
 export const VideoLayer: React.FC<VideoLayerProps> = ({ clips }) => {
-  const frame = useCurrentFrame();
   const { fps, width, height } = useVideoConfig();
-  const currentTime = frame / fps;
-  const TRANSITION_SEC = 0.5; // Thời lượng chuyển cảnh hòa tan Cross Dissolve
 
   if (!clips || clips.length === 0) {
     return (
@@ -170,88 +188,57 @@ export const VideoLayer: React.FC<VideoLayerProps> = ({ clips }) => {
         style={{
           width: '100%',
           height: '100%',
-          backgroundColor: '#000000',
+          backgroundColor: '#0B0F19',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
           color: '#F59E0B',
           fontSize: 32,
+          fontFamily: 'Be Vietnam Pro',
         }}
       >
-        Tâm Đức - Không gian Thờ Phật
+        Tâm Đức - Không Gian Thờ Phật
       </div>
     );
   }
 
-  // Tìm vị trí clip đang phát tại currentTime
-  let currentIndex = clips.findIndex(
-    (c) => currentTime >= c.timelineStart && currentTime < c.timelineEnd
-  );
-
-  if (currentIndex === -1) {
-    currentIndex = currentTime >= clips[clips.length - 1].timelineEnd
-      ? clips.length - 1
-      : 0;
-  }
-
-  const currentClip = clips[currentIndex];
-
-  // Kiểm tra trạng thái chuyển cảnh Cross Dissolve
-  let prevClip: TimelineClipItem | null = null;
-  let nextClip: TimelineClipItem | null = null;
-  let currentOpacity = 1.0;
-  let nextOpacity = 0.0;
-
-  // Trường hợp 1: Đang ở đầu clip hiện tại và có clip trước đó (chuyển cảnh từ clip trước sang clip này)
-  if (currentIndex > 0 && currentTime - currentClip.timelineStart < TRANSITION_SEC) {
-    prevClip = clips[currentIndex - 1];
-    currentOpacity = Math.max(0, Math.min(1, (currentTime - currentClip.timelineStart) / TRANSITION_SEC));
-  }
-  // Trường hợp 2: Đang ở cuối clip hiện tại và có clip tiếp theo (chuyển cảnh từ clip này sang clip sau)
-  else if (
-    currentIndex < clips.length - 1 &&
-    currentClip.timelineEnd - currentTime < TRANSITION_SEC
-  ) {
-    nextClip = clips[currentIndex + 1];
-    nextOpacity = Math.max(0, Math.min(1, (TRANSITION_SEC - (currentClip.timelineEnd - currentTime)) / TRANSITION_SEC));
-  }
+  // Cross Dissolve overlap duration (0.5s = 15 frames tại 30fps)
+  const overlapSec = 0.5;
 
   return (
     <div style={{ position: 'relative', width, height, overflow: 'hidden', backgroundColor: '#000000' }}>
-      {/* 1. Lớp Clip Trước (nếu đang trong giai đoạn đầu chuyển cảnh) */}
-      {prevClip && (
-        <SingleClipMedia
-          key={`prev_${prevClip.id}`}
-          clip={prevClip}
-          currentTime={currentTime}
-          opacity={1.0}
-          width={width}
-          height={height}
-        />
-      )}
+      {clips.map((clip, index) => {
+        const isFirst = index === 0;
+        const isLast = index === clips.length - 1;
 
-      {/* 2. Lớp Clip Hiện Tại */}
-      <SingleClipMedia
-        key={`curr_${currentClip.id}`}
-        clip={currentClip}
-        currentTime={currentTime}
-        opacity={currentOpacity}
-        width={width}
-        height={height}
-      />
+        // Clip bắt đầu chính xác tại timelineStart
+        const fromSec = clip.timelineStart;
+        // Mở rộng thời lượng clip thêm overlapSec để clip sau có thể fade-in chồng lên cuối clip này
+        // Clip cuối cùng không cần mở rộng
+        const extraOverlap = isLast ? 0 : overlapSec;
+        const durationSec = Math.max(0.1, (clip.timelineEnd - clip.timelineStart) + extraOverlap);
 
-      {/* 3. Lớp Clip Kế Tiếp (nếu đang trong giai đoạn cuối chuyển cảnh) */}
-      {nextClip && (
-        <SingleClipMedia
-          key={`next_${nextClip.id}`}
-          clip={nextClip}
-          currentTime={currentTime}
-          opacity={nextOpacity}
-          width={width}
-          height={height}
-        />
-      )}
+        const fromFrame = Math.round(fromSec * fps);
+        const durationFrames = Math.max(1, Math.round(durationSec * fps));
+
+        return (
+          <Sequence
+            key={clip.id || `clip_${index}`}
+            from={fromFrame}
+            durationInFrames={durationFrames}
+            layout="none"
+          >
+            <SingleClipView
+              clip={clip}
+              durationFrames={durationFrames}
+              isFirst={isFirst}
+              width={width}
+              height={height}
+              fps={fps}
+            />
+          </Sequence>
+        );
+      })}
     </div>
   );
 };
-

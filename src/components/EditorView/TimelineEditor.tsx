@@ -1,6 +1,37 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useCallback, useEffect } from 'react';
 import { Player, PlayerRef } from '@remotion/player';
-import { Play, Pause, Download, Volume2, Film, Type, Music, Trash2, ArrowLeftRight, CheckCircle, RefreshCw, FolderOpen, Sliders } from 'lucide-react';
+import {
+  Download,
+  Film,
+  Type,
+  Music,
+  Trash2,
+  CheckCircle,
+  RefreshCw,
+  FolderOpen,
+  ZoomIn,
+  ZoomOut,
+  GripVertical,
+  ArrowLeftRight,
+} from 'lucide-react';
+import {
+  DndContext,
+  closestCenter,
+  MouseSensor,
+  TouchSensor,
+  useSensor,
+  useSensors,
+  DragEndEvent,
+  DragStartEvent,
+  DragOverlay,
+} from '@dnd-kit/core';
+import {
+  SortableContext,
+  useSortable,
+  horizontalListSortingStrategy,
+  arrayMove,
+} from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
 import { MainVideo } from '../../remotion/MainVideo.js';
 import { MainVideoProps, SubtitleLine, TimelineClipItem } from '../../remotion/types.js';
 
@@ -18,19 +49,171 @@ interface TimelineEditorProps {
   onUpdateSubtitles: (subtitles: SubtitleLine[]) => void;
 }
 
-const STAGE_LABELS: Record<string, { label: string; color: string }> = {
-  STAGE_1_RAW_CARPENTRY: { label: 'Thô', color: 'bg-orange-500/20 text-orange-400 border-orange-500/40' },
-  STAGE_2_ASSEMBLY_FINISHING: { label: 'Lắp ráp', color: 'bg-blue-500/20 text-blue-400 border-blue-500/40' },
-  STAGE_3_DECOR_FLOWERS: { label: 'Cắm hoa', color: 'bg-emerald-500/20 text-emerald-400 border-emerald-500/40' },
-  STAGE_4_WORSHIP_ALTAR: { label: 'Lễ Phật', color: 'bg-amber-500/20 text-amber-300 border-amber-500/40' },
+const STAGE_COLORS: Record<string, string> = {
+  STAGE_1_RAW_CARPENTRY: '#f97316',
+  STAGE_2_ASSEMBLY_FINISHING: '#3b82f6',
+  STAGE_3_DECOR_FLOWERS: '#10b981',
+  STAGE_4_WORSHIP_ALTAR: '#f59e0b',
 };
 
+const STAGE_LABELS: Record<string, string> = {
+  STAGE_1_RAW_CARPENTRY: 'Thô',
+  STAGE_2_ASSEMBLY_FINISHING: 'Lắp ráp',
+  STAGE_3_DECOR_FLOWERS: 'Cắm hoa',
+  STAGE_4_WORSHIP_ALTAR: 'Lễ Phật',
+};
+
+const MIN_ZOOM = 0.5;
+const MAX_ZOOM = 6.0;
+const LABEL_WIDTH = 100; // pixels for track label column
+const BASE_PX_PER_SEC = 120; // base pixels per second at zoom 1.0
+
+// ───────────────────────────────────────────────────────
+// Sortable Clip Item
+// ───────────────────────────────────────────────────────
+interface SortableClipProps {
+  clip: TimelineClipItem;
+  index: number;
+  totalClips: number;
+  widthPx: number;
+  onMoveClip: (index: number, direction: 'left' | 'right') => void;
+  onDeleteClip: (index: number) => void;
+}
+
+const SortableClip: React.FC<SortableClipProps> = ({
+  clip,
+  index,
+  totalClips,
+  widthPx,
+  onMoveClip,
+  onDeleteClip,
+}) => {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+    id: clip.id,
+  });
+
+  const stageColor = STAGE_COLORS[clip.stage] || '#64748b';
+  const stageLabel = STAGE_LABELS[clip.stage] || 'N/A';
+
+  const style: React.CSSProperties = {
+    transform: CSS.Translate.toString(transform),
+    transition,
+    width: Math.max(48, widthPx),
+    flexShrink: 0,
+    opacity: isDragging ? 0.4 : 1,
+    zIndex: isDragging ? 50 : 1,
+    touchAction: 'none',
+  };
+
+  return (
+    <div
+      ref={setNodeRef}
+      style={style}
+      {...attributes}
+      {...listeners}
+      className={`relative bg-slate-900/90 border rounded-lg flex flex-col overflow-hidden group cursor-grab active:cursor-grabbing select-none ${
+        isDragging
+          ? 'border-amber-400 ring-2 ring-amber-400/50 shadow-2xl shadow-amber-500/40'
+          : 'border-slate-700/80 hover:border-slate-500'
+      }`}
+    >
+      {/* Stage top border accent */}
+      <div className="h-[3px] w-full" style={{ backgroundColor: stageColor }} />
+
+      {/* Grip header icon */}
+      <div className="absolute top-1 left-1.5 z-10 pointer-events-none bg-black/60 backdrop-blur-xs rounded px-1 py-0.5 flex items-center gap-1 border border-white/10">
+        <GripVertical className="w-3 h-3 text-amber-400" />
+        <span className="text-[8px] font-mono text-amber-300 font-bold">#{index + 1}</span>
+      </div>
+
+      {/* Thumbnail */}
+      <div className="h-16 bg-black overflow-hidden relative pointer-events-none">
+        {clip.thumbnailPath ? (
+          <img
+            src={`/media/thumbnails/${clip.thumbnailPath.split(/[\\/]/).pop()}`}
+            alt={clip.fileName}
+            className="w-full h-full object-cover"
+            draggable={false}
+          />
+        ) : (
+          <div className="w-full h-full flex items-center justify-center text-slate-600 text-[9px]">
+            No Thumb
+          </div>
+        )}
+        {/* Time badge */}
+        <span className="absolute bottom-0.5 right-0.5 bg-black/80 font-mono text-[8px] px-1 py-[1px] rounded text-amber-300 border border-amber-500/30 font-bold">
+          {clip.sourceDuration.toFixed(1)}s
+        </span>
+      </div>
+
+      {/* Info */}
+      <div className="px-1.5 py-1 flex-1 min-h-0 pointer-events-none">
+        {widthPx > 60 && (
+          <p className="text-[9px] font-semibold text-slate-300 truncate leading-tight">
+            {clip.fileName}
+          </p>
+        )}
+        <span
+          className="inline-block text-[8px] px-1 py-[0.5px] rounded font-medium mt-0.5 text-white/90"
+          style={{ backgroundColor: stageColor + '40', border: `1px solid ${stageColor}60` }}
+        >
+          {stageLabel}
+        </span>
+      </div>
+
+      {/* Controls */}
+      <div
+        className="flex items-center justify-between px-1 py-0.5 border-t border-slate-800/80 bg-slate-950/80 opacity-0 group-hover:opacity-100 transition-opacity z-20"
+        onPointerDown={(e) => e.stopPropagation()}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            onMoveClip(index, 'left');
+          }}
+          disabled={index === 0}
+          className="text-[9px] px-1.5 py-0.5 bg-slate-800 hover:bg-slate-700 rounded text-slate-300 disabled:opacity-30 cursor-pointer"
+          title="Di chuyển sang trái"
+        >
+          ◀
+        </button>
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            onDeleteClip(index);
+          }}
+          className="text-slate-500 hover:text-red-400 p-0.5 cursor-pointer"
+          title="Xóa clip này"
+        >
+          <Trash2 className="w-3 h-3" />
+        </button>
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            onMoveClip(index, 'right');
+          }}
+          disabled={index === totalClips - 1}
+          className="text-[9px] px-1.5 py-0.5 bg-slate-800 hover:bg-slate-700 rounded text-slate-300 disabled:opacity-30 cursor-pointer"
+          title="Di chuyển sang phải"
+        >
+          ▶
+        </button>
+      </div>
+    </div>
+  );
+};
+
+// ───────────────────────────────────────────────────────
+// Main TimelineEditor
+// ───────────────────────────────────────────────────────
 export const TimelineEditor: React.FC<TimelineEditorProps> = ({
   timelineData,
   onUpdateClips,
   onUpdateSubtitles,
 }) => {
   const playerRef = useRef<PlayerRef>(null);
+  const timelineScrollRef = useRef<HTMLDivElement>(null);
 
   // Audio settings
   const [voiceVolume, setVoiceVolume] = useState<number>(1.0);
@@ -49,10 +232,45 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
   const [renderMessage, setRenderMessage] = useState<string>('');
   const [renderOutputPath, setRenderOutputPath] = useState<string | null>(null);
 
-  const durationInFrames = Math.max(30, Math.ceil(timelineData.duration * 30));
+  // Zoom & Pan state
+  const [zoomLevel, setZoomLevel] = useState<number>(1.0);
 
-  // Fetch BGM list
-  React.useEffect(() => {
+  // Active clip dragging state for DragOverlay
+  const [activeClipId, setActiveClipId] = useState<string | null>(null);
+
+  // Playhead state
+  const [currentFrame, setCurrentFrame] = useState<number>(0);
+
+  // Drag pan state
+  const [isPanning, setIsPanning] = useState(false);
+  const [panStart, setPanStart] = useState({ x: 0, scrollLeft: 0 });
+
+  // Ref for the timeline bottom area (for native wheel listener)
+  const timelineAreaRef = useRef<HTMLDivElement>(null);
+
+  const fps = 30;
+  const durationInFrames = Math.max(30, Math.ceil(timelineData.duration * fps));
+  const totalDuration = timelineData.duration;
+  const pxPerSec = BASE_PX_PER_SEC * zoomLevel;
+  const trackWidth = totalDuration * pxPerSec;
+
+  // DnD sensors - MouseSensor & TouchSensor for high reliability
+  const sensors = useSensors(
+    useSensor(MouseSensor, {
+      activationConstraint: {
+        distance: 4,
+      },
+    }),
+    useSensor(TouchSensor, {
+      activationConstraint: {
+        delay: 150,
+        tolerance: 5,
+      },
+    })
+  );
+
+  // ── Fetch BGM list ──
+  useEffect(() => {
     fetch('/api/generator/bgm-list')
       .then((res) => res.json())
       .then((data) => {
@@ -63,66 +281,193 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
       });
   }, []);
 
-  // Clip manipulation
-  const handleMoveClip = (index: number, direction: 'left' | 'right') => {
-    const newClips = [...timelineData.clips];
-    const targetIdx = direction === 'left' ? index - 1 : index + 1;
-    if (targetIdx < 0 || targetIdx >= newClips.length) return;
-
-    const temp = newClips[index];
-    newClips[index] = newClips[targetIdx];
-    newClips[targetIdx] = temp;
-
-    // Recalculate timeline starts/ends
-    let curTime = 0;
-    newClips.forEach((c) => {
-      c.timelineStart = Number(curTime.toFixed(2));
-      c.timelineEnd = Number((curTime + c.sourceDuration).toFixed(2));
-      curTime += c.sourceDuration;
-    });
-
-    onUpdateClips(newClips);
-  };
-
-  const handleDeleteClip = (index: number) => {
-    if (timelineData.clips.length <= 1) return;
-    const newClips = timelineData.clips.filter((_, i) => i !== index);
-
-    let curTime = 0;
-    newClips.forEach((c) => {
-      c.timelineStart = Number(curTime.toFixed(2));
-      c.timelineEnd = Number((curTime + c.sourceDuration).toFixed(2));
-      curTime += c.sourceDuration;
-    });
-
-    onUpdateClips(newClips);
-  };
-
-  // Subtitle Edit Save
-  const handleSaveSubtitle = (id: string) => {
-    const newSubs = timelineData.subtitles.map((sub) => {
-      if (sub.id === id) {
-        // Tái tạo mảng words từ text mới
-        const words = editingSubText.split(/\s+/).filter(Boolean);
-        const wordDur = (sub.end - sub.start) / words.length;
-        return {
-          ...sub,
-          text: editingSubText,
-          words: words.map((w, i) => ({
-            word: w,
-            start: Number((sub.start + i * wordDur).toFixed(2)),
-            end: Number((sub.start + (i + 1) * wordDur).toFixed(2)),
-          })),
-        };
+  // ── Playhead sync: poll Remotion Player frame ──
+  useEffect(() => {
+    const interval = setInterval(() => {
+      if (playerRef.current) {
+        const frame = playerRef.current.getCurrentFrame();
+        setCurrentFrame(frame);
       }
-      return sub;
-    });
+    }, 100);
+    return () => clearInterval(interval);
+  }, []);
 
-    onUpdateSubtitles(newSubs);
-    setEditingSubId(null);
-  };
+  // ── Native wheel listener with { passive: false } to intercept Ctrl+Scroll ──
+  useEffect(() => {
+    const el = timelineAreaRef.current;
+    if (!el) return;
 
-  // Handle Render Start
+    const handler = (e: WheelEvent) => {
+      if (e.ctrlKey || e.metaKey) {
+        e.preventDefault();
+        e.stopPropagation();
+        const delta = e.deltaY > 0 ? -0.15 : 0.15;
+        setZoomLevel((prev) => Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, prev + delta)));
+      }
+    };
+
+    el.addEventListener('wheel', handler, { passive: false });
+    return () => el.removeEventListener('wheel', handler);
+  }, []);
+
+  // ── Helper: recalculate timeline positions after reorder ──
+  const recalcTimelinePositions = useCallback(
+    (clips: TimelineClipItem[]): TimelineClipItem[] => {
+      const total = totalDuration;
+      const eachDur = total / clips.length;
+      let curTime = 0;
+      return clips.map((c, i) => {
+        const isLast = i === clips.length - 1;
+        const thisDur = isLast ? Math.max(0.1, total - curTime) : eachDur;
+        const newClip = {
+          ...c,
+          timelineStart: Number(curTime.toFixed(2)),
+          timelineEnd: Number((curTime + thisDur).toFixed(2)),
+          sourceDuration: Number(thisDur.toFixed(2)),
+        };
+        curTime += thisDur;
+        return newClip;
+      });
+    },
+    [totalDuration]
+  );
+
+  // ── Clip manipulation ──
+  const handleMoveClip = useCallback(
+    (index: number, direction: 'left' | 'right') => {
+      const newClips = [...timelineData.clips];
+      const targetIdx = direction === 'left' ? index - 1 : index + 1;
+      if (targetIdx < 0 || targetIdx >= newClips.length) return;
+
+      const temp = newClips[index];
+      newClips[index] = newClips[targetIdx];
+      newClips[targetIdx] = temp;
+
+      onUpdateClips(recalcTimelinePositions(newClips));
+    },
+    [timelineData.clips, onUpdateClips, recalcTimelinePositions]
+  );
+
+  const handleDeleteClip = useCallback(
+    (index: number) => {
+      if (timelineData.clips.length <= 1) return;
+      const newClips = timelineData.clips.filter((_, i) => i !== index);
+      onUpdateClips(recalcTimelinePositions(newClips));
+    },
+    [timelineData.clips, onUpdateClips, recalcTimelinePositions]
+  );
+
+  // ── DnD reorder ──
+  const handleDragStart = useCallback((event: DragStartEvent) => {
+    setActiveClipId(event.active.id as string);
+  }, []);
+
+  const handleDragEnd = useCallback(
+    (event: DragEndEvent) => {
+      setActiveClipId(null);
+      const { active, over } = event;
+      if (!over || active.id === over.id) return;
+
+      const oldIndex = timelineData.clips.findIndex((c) => c.id === active.id);
+      const newIndex = timelineData.clips.findIndex((c) => c.id === over.id);
+      if (oldIndex === -1 || newIndex === -1) return;
+
+      const reordered = arrayMove([...timelineData.clips], oldIndex, newIndex);
+      onUpdateClips(recalcTimelinePositions(reordered));
+    },
+    [timelineData.clips, onUpdateClips, recalcTimelinePositions]
+  );
+
+  // ── Subtitle Edit Save ──
+  const handleSaveSubtitle = useCallback(
+    (id: string) => {
+      const newSubs = timelineData.subtitles.map((sub) => {
+        if (sub.id === id) {
+          const words = editingSubText.split(/\s+/).filter(Boolean);
+          const wordDur = (sub.end - sub.start) / words.length;
+          return {
+            ...sub,
+            text: editingSubText,
+            words: words.map((w, i) => ({
+              word: w,
+              start: Number((sub.start + i * wordDur).toFixed(2)),
+              end: Number((sub.start + (i + 1) * wordDur).toFixed(2)),
+            })),
+          };
+        }
+        return sub;
+      });
+
+      onUpdateSubtitles(newSubs);
+      setEditingSubId(null);
+    },
+    [timelineData.subtitles, editingSubText, onUpdateSubtitles]
+  );
+
+  // ── Zoom ──
+  const handleZoom = useCallback(
+    (delta: number) => {
+      setZoomLevel((prev) => Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, prev + delta)));
+    },
+    []
+  );
+
+  // ── Ctrl+Scroll to zoom ──
+  const handleWheel = useCallback(
+    (e: React.WheelEvent) => {
+      if (e.ctrlKey || e.metaKey) {
+        e.preventDefault();
+        e.stopPropagation();
+        const delta = e.deltaY > 0 ? -0.15 : 0.15;
+        handleZoom(delta);
+      }
+    },
+    [handleZoom]
+  );
+
+  // ── Drag Pan ──
+  const handlePanMouseDown = useCallback(
+    (e: React.MouseEvent) => {
+      // Middle click OR Shift+Left click
+      if (e.button === 1 || (e.shiftKey && e.button === 0)) {
+        e.preventDefault();
+        setIsPanning(true);
+        setPanStart({
+          x: e.clientX,
+          scrollLeft: timelineScrollRef.current?.scrollLeft || 0,
+        });
+      }
+    },
+    []
+  );
+
+  const handlePanMouseMove = useCallback(
+    (e: React.MouseEvent) => {
+      if (!isPanning || !timelineScrollRef.current) return;
+      const dx = e.clientX - panStart.x;
+      timelineScrollRef.current.scrollLeft = panStart.scrollLeft - dx;
+    },
+    [isPanning, panStart]
+  );
+
+  const handlePanMouseUp = useCallback(() => {
+    setIsPanning(false);
+  }, []);
+
+  // ── Click ruler to seek ──
+  const handleRulerClick = useCallback(
+    (e: React.MouseEvent<HTMLDivElement>) => {
+      const rect = e.currentTarget.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const timeSec = x / pxPerSec;
+      const frame = Math.round(Math.max(0, Math.min(timeSec, totalDuration)) * fps);
+      playerRef.current?.seekTo(frame);
+      setCurrentFrame(frame);
+    },
+    [pxPerSec, totalDuration, fps]
+  );
+
+  // ── Render ──
   const handleStartRender = async () => {
     try {
       setRendering(true);
@@ -162,7 +507,6 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
         if (data.success) {
           setRenderPercent(data.data.percent);
           setRenderMessage(data.data.message);
-
           if (data.data.status === 'completed') {
             clearInterval(interval);
             setRenderOutputPath(data.data.outputPath);
@@ -182,9 +526,38 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
     });
   };
 
+  // ── Ruler tick marks ──
+  const generateRulerTicks = () => {
+    const ticks: { time: number; major: boolean }[] = [];
+    // Determine tick interval based on zoom
+    let interval = 1;
+    if (zoomLevel < 0.8) interval = 5;
+    else if (zoomLevel < 1.5) interval = 2;
+    else if (zoomLevel < 3) interval = 1;
+    else interval = 0.5;
+
+    for (let t = 0; t <= totalDuration; t += interval) {
+      const isMajor = interval >= 1 ? t % (interval * 2 === 0 ? 2 : Math.max(2, interval)) === 0 : t % 1 === 0;
+      ticks.push({ time: Number(t.toFixed(1)), major: t % Math.max(1, interval * 2) === 0 });
+    }
+    return ticks;
+  };
+
+  // ── Format time ──
+  const formatTime = (sec: number) => {
+    const m = Math.floor(sec / 60);
+    const s = Math.floor(sec % 60);
+    return m > 0 ? `${m}:${s.toString().padStart(2, '0')}` : `${s}s`;
+  };
+
+  // ── Playhead position ──
+  const playheadTimeSec = currentFrame / fps;
+  const playheadPx = playheadTimeSec * pxPerSec;
+
+  // ── Composition props ──
   const compositionProps: MainVideoProps = {
     durationInFrames,
-    fps: 30,
+    fps,
     width: 1080,
     height: 1920,
     clips: timelineData.clips,
@@ -200,7 +573,7 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
 
   return (
     <div className="flex flex-col h-[calc(100vh-4rem)] bg-[#0B0F19] text-slate-100 overflow-hidden">
-      {/* Top Workspace Area: Player 9:16 + Control Panel */}
+      {/* ════════ Top Workspace Area: Player 9:16 + Control Panel ════════ */}
       <div className="flex-1 flex gap-6 p-6 overflow-hidden min-h-0">
         {/* Khung Xem Trước Remotion 9:16 */}
         <div className="flex-1 flex items-center justify-center bg-black/60 rounded-2xl border border-slate-800 p-4 relative shadow-2xl overflow-hidden">
@@ -317,148 +690,272 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
         </div>
       </div>
 
-      {/* Bottom Timeline Tracks Area */}
-      <div className="h-64 bg-[#111827] border-t border-slate-800 flex flex-col overflow-hidden">
-        {/* Timeline Header Bar */}
-        <div className="h-8 px-6 bg-slate-900 border-b border-slate-800 flex items-center justify-between text-xs text-slate-400">
+      {/* ════════ Bottom Timeline Tracks Area ════════ */}
+      <div
+        ref={timelineAreaRef}
+        className="h-72 bg-[#111827] border-t border-slate-800 flex flex-col overflow-hidden select-none"
+      >
+        {/* Timeline Toolbar */}
+        <div className="h-9 px-4 bg-slate-900/90 border-b border-slate-800 flex items-center justify-between text-xs text-slate-400 flex-shrink-0">
           <div className="flex items-center gap-4 font-mono text-[11px]">
-            <span className="text-amber-400 font-bold">TIMELINE MULTI-TRACK 9:16</span>
-            <span>Tổng thời gian: {timelineData.duration.toFixed(1)}s</span>
+            <span className="text-amber-400 font-bold">TIMELINE 9:16</span>
+            <span>
+              {formatTime(playheadTimeSec)} / {formatTime(totalDuration)}
+            </span>
+            <span className="text-slate-600">|</span>
+            <span className="text-slate-500">
+              Frame {currentFrame} / {durationInFrames}
+            </span>
           </div>
-          <span className="text-[11px] text-slate-500">
-            💡 Có thể đổi thứ tự clip hoặc bấm vào phụ đề bên dưới để chỉnh sửa chữ
-          </span>
+
+          {/* Zoom Controls */}
+          <div className="flex items-center gap-2">
+            <span className="text-[10px] text-slate-500 mr-1">Zoom:</span>
+            <button
+              onClick={() => handleZoom(-0.25)}
+              className="p-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-amber-400 transition"
+              title="Thu nhỏ"
+            >
+              <ZoomOut className="w-3.5 h-3.5" />
+            </button>
+            <span className="font-mono text-[11px] text-amber-400 font-bold w-10 text-center">
+              {zoomLevel.toFixed(1)}x
+            </span>
+            <button
+              onClick={() => handleZoom(0.25)}
+              className="p-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-amber-400 transition"
+              title="Phóng to"
+            >
+              <ZoomIn className="w-3.5 h-3.5" />
+            </button>
+
+            <span className="text-slate-700 mx-1">|</span>
+            <span className="text-[10px] text-slate-600 italic">
+              Ctrl+Scroll zoom • Shift+Drag pan • Kéo clip đổi vị trí
+            </span>
+          </div>
         </div>
 
-        {/* Multi-Track Scroll Area */}
-        <div className="flex-1 p-4 overflow-x-auto overflow-y-auto space-y-3">
-          {/* TRACK 1: VIDEO CLIPS */}
-          <div className="flex items-center gap-2 min-w-max">
-            <div className="w-24 text-[11px] font-bold text-amber-400 flex items-center gap-1.5 flex-shrink-0">
-              <Film className="w-3.5 h-3.5" /> Video ({timelineData.clips.length})
+        {/* Scrollable Timeline Area */}
+        <div className="flex-1 flex overflow-hidden min-h-0">
+          {/* Track Labels (fixed left column) */}
+          <div className="flex flex-col flex-shrink-0" style={{ width: LABEL_WIDTH }}>
+            {/* Ruler label */}
+            <div className="h-6 flex items-center px-3 border-b border-slate-800 bg-slate-900/50">
+              <span className="text-[9px] font-mono text-slate-500">⏱ TIME</span>
             </div>
-            <div className="flex gap-2">
-              {timelineData.clips.map((clip, idx) => {
-                const stageInfo = STAGE_LABELS[clip.stage] || { label: 'Lắp ráp', color: 'bg-slate-800 text-slate-300 border-slate-700' };
-                return (
-                  <div
-                    key={clip.id}
-                    className="w-36 bg-slate-900 border border-slate-700/80 rounded-xl p-2 flex flex-col justify-between text-xs group relative shadow-md"
-                  >
-                    <div>
-                      <div className="h-16 bg-black rounded-lg overflow-hidden relative mb-1.5">
-                        {clip.thumbnailPath ? (
-                          <img
-                            src={`/media/thumbnails/${clip.thumbnailPath.split(/[\\/]/).pop()}`}
-                            alt={clip.fileName}
-                            className="w-full h-full object-cover"
-                          />
-                        ) : (
-                          <div className="w-full h-full flex items-center justify-center text-slate-600 text-[10px]">
-                            No Thumb
-                          </div>
-                        )}
-                        <span className="absolute bottom-1 right-1 bg-black/80 text-[10px] px-1 rounded text-white">
-                          {clip.sourceDuration.toFixed(1)}s
-                        </span>
-                      </div>
-                      <p className="text-[11px] font-semibold text-slate-200 truncate">{clip.fileName}</p>
-                      <span className={`inline-block text-[9px] px-1.5 py-0.2 rounded font-medium border ${stageInfo.color} mt-1`}>
-                        {stageInfo.label}
-                      </span>
-                    </div>
-
-                    {/* Clip Controls (Move Left/Right, Delete) */}
-                    <div className="flex items-center justify-between mt-2 pt-1 border-t border-slate-800/80">
-                      <button
-                        onClick={() => handleMoveClip(idx, 'left')}
-                        disabled={idx === 0}
-                        className="text-[10px] px-1.5 py-0.5 bg-slate-800 hover:bg-slate-700 rounded text-slate-300 disabled:opacity-30"
-                      >
-                        ◀
-                      </button>
-                      <button
-                        onClick={() => handleDeleteClip(idx)}
-                        className="text-slate-500 hover:text-red-400 p-0.5"
-                        title="Xóa clip này"
-                      >
-                        <Trash2 className="w-3 h-3" />
-                      </button>
-                      <button
-                        onClick={() => handleMoveClip(idx, 'right')}
-                        disabled={idx === timelineData.clips.length - 1}
-                        className="text-[10px] px-1.5 py-0.5 bg-slate-800 hover:bg-slate-700 rounded text-slate-300 disabled:opacity-30"
-                      >
-                        ▶
-                      </button>
-                    </div>
-                  </div>
-                );
-              })}
+            {/* Video label */}
+            <div className="h-[105px] flex items-center px-3 border-b border-slate-800/50">
+              <div className="text-[11px] font-bold text-amber-400 flex items-center gap-1.5">
+                <Film className="w-3.5 h-3.5" />
+                <span>Video ({timelineData.clips.length})</span>
+              </div>
+            </div>
+            {/* Subtitle label */}
+            <div className="flex-1 flex items-center px-3">
+              <div className="text-[11px] font-bold text-yellow-300 flex items-center gap-1.5">
+                <Type className="w-3.5 h-3.5" />
+                <span>Sub ({timelineData.subtitles.length})</span>
+              </div>
             </div>
           </div>
 
-          {/* TRACK 2: SUBTITLE LINES */}
-          <div className="flex items-center gap-2 min-w-max">
-            <div className="w-24 text-[11px] font-bold text-yellow-300 flex items-center gap-1.5 flex-shrink-0">
-              <Type className="w-3.5 h-3.5" /> Subtitle ({timelineData.subtitles.length})
-            </div>
-            <div className="flex gap-2">
-              {timelineData.subtitles.map((sub) => {
-                const isEditing = editingSubId === sub.id;
-                return (
-                  <div
-                    key={sub.id}
-                    className="w-44 bg-slate-900/90 border border-yellow-500/20 rounded-xl p-2 text-xs flex flex-col justify-between"
-                  >
-                    <div className="text-[10px] font-mono text-slate-400 mb-1">
-                      {sub.start.toFixed(1)}s - {sub.end.toFixed(1)}s
+          {/* Scrollable tracks content */}
+          <div
+            ref={timelineScrollRef}
+            className="flex-1 overflow-x-auto overflow-y-hidden"
+            style={{ cursor: isPanning ? 'grabbing' : 'default' }}
+            onMouseDown={handlePanMouseDown}
+            onMouseMove={handlePanMouseMove}
+            onMouseUp={handlePanMouseUp}
+            onMouseLeave={handlePanMouseUp}
+          >
+            <div className="relative" style={{ width: trackWidth, minHeight: '100%' }}>
+              {/* ── Ruler ── */}
+              <div
+                className="h-6 border-b border-slate-700/60 relative cursor-pointer bg-slate-900/30"
+                onClick={handleRulerClick}
+                title="Click để seek tới mốc thời gian"
+              >
+                {generateRulerTicks().map((tick, i) => {
+                  const x = tick.time * pxPerSec;
+                  return (
+                    <div key={i} className="absolute top-0" style={{ left: x }}>
+                      <div
+                        className={`${tick.major ? 'h-6 border-slate-600' : 'h-3 border-slate-800'}`}
+                        style={{ borderLeft: '1px solid' }}
+                      />
+                      {(tick.major || zoomLevel >= 2) && (
+                        <span
+                          className="absolute text-[8px] font-mono text-slate-500 select-none"
+                          style={{ top: tick.major ? 1 : 0, left: 3, whiteSpace: 'nowrap' }}
+                        >
+                          {formatTime(tick.time)}
+                        </span>
+                      )}
                     </div>
+                  );
+                })}
+              </div>
 
-                    {isEditing ? (
-                      <div className="space-y-1.5">
-                        <textarea
-                          value={editingSubText}
-                          onChange={(e) => setEditingSubText(e.target.value)}
-                          className="w-full bg-black border border-amber-500 text-white text-[11px] p-1 rounded outline-none"
-                          rows={2}
-                        />
-                        <div className="flex justify-end gap-1">
-                          <button
-                            onClick={() => setEditingSubId(null)}
-                            className="px-2 py-0.5 bg-slate-800 text-[10px] rounded text-slate-300"
-                          >
-                            Hủy
-                          </button>
-                          <button
-                            onClick={() => handleSaveSubtitle(sub.id)}
-                            className="px-2 py-0.5 bg-amber-500 text-[10px] rounded text-black font-bold"
-                          >
-                            Lưu
-                          </button>
+              {/* ── TRACK 1: VIDEO CLIPS (proportional width) ── */}
+              <div className="h-[105px] border-b border-slate-800/50 relative">
+                <DndContext
+                  sensors={sensors}
+                  collisionDetection={closestCenter}
+                  onDragStart={handleDragStart}
+                  onDragEnd={handleDragEnd}
+                >
+                  <SortableContext
+                    items={timelineData.clips.map((c) => c.id)}
+                    strategy={horizontalListSortingStrategy}
+                  >
+                    <div className="flex h-full items-stretch py-1 gap-[1px]">
+                      {timelineData.clips.map((clip, idx) => {
+                        const widthPx = clip.sourceDuration * pxPerSec;
+                        return (
+                          <SortableClip
+                            key={clip.id}
+                            clip={clip}
+                            index={idx}
+                            totalClips={timelineData.clips.length}
+                            widthPx={widthPx}
+                            onMoveClip={handleMoveClip}
+                            onDeleteClip={handleDeleteClip}
+                          />
+                        );
+                      })}
+                    </div>
+                  </SortableContext>
+
+                  {/* Drag overlay for smooth visual feedback */}
+                  <DragOverlay>
+                    {activeClipId ? (() => {
+                      const activeClip = timelineData.clips.find((c) => c.id === activeClipId);
+                      if (!activeClip) return null;
+                      const activeStageColor = STAGE_COLORS[activeClip.stage] || '#64748b';
+                      return (
+                        <div
+                          className="bg-slate-900 border-2 border-amber-400 rounded-lg flex flex-col overflow-hidden shadow-2xl shadow-amber-500/50 opacity-95 pointer-events-none"
+                          style={{
+                            width: Math.max(48, activeClip.sourceDuration * pxPerSec),
+                            height: 98,
+                          }}
+                        >
+                          <div className="h-[3px] w-full" style={{ backgroundColor: activeStageColor }} />
+                          <div className="h-16 bg-black overflow-hidden relative">
+                            {activeClip.thumbnailPath ? (
+                              <img
+                                src={`/media/thumbnails/${activeClip.thumbnailPath.split(/[\\/]/).pop()}`}
+                                alt={activeClip.fileName}
+                                className="w-full h-full object-cover"
+                              />
+                            ) : null}
+                            <span className="absolute bottom-0.5 right-0.5 bg-black/80 font-mono text-[8px] px-1 py-[1px] rounded text-amber-300 border border-amber-500/30 font-bold">
+                              {activeClip.sourceDuration.toFixed(1)}s
+                            </span>
+                          </div>
+                          <div className="px-1.5 py-1">
+                            <p className="text-[9px] font-semibold text-amber-300 truncate leading-tight">
+                              {activeClip.fileName}
+                            </p>
+                          </div>
                         </div>
-                      </div>
-                    ) : (
-                      <p
-                        onClick={() => {
-                          setEditingSubId(sub.id);
-                          setEditingSubText(sub.text);
-                        }}
-                        className="text-[11px] text-slate-200 font-medium line-clamp-2 cursor-pointer hover:text-amber-300"
-                        title="Bấm để sửa câu này"
-                      >
-                        {sub.text}
-                      </p>
-                    )}
-                  </div>
-                );
-              })}
+                      );
+                    })() : null}
+                  </DragOverlay>
+                </DndContext>
+              </div>
+
+              {/* ── TRACK 2: SUBTITLE LINES (absolute position per voice timing) ── */}
+              <div className="relative min-h-[48px] h-[48px]">
+                {timelineData.subtitles.map((sub) => {
+                  const subDuration = sub.end - sub.start;
+                  const widthPx = Math.max(20, subDuration * pxPerSec);
+                  const leftPx = sub.start * pxPerSec;
+                  const isEditing = editingSubId === sub.id;
+
+                  return (
+                    <div
+                      key={sub.id}
+                      className={`absolute top-1 bottom-1 bg-slate-900/80 border rounded-md flex flex-col justify-center px-1.5 py-0.5 text-[9px] overflow-hidden ${
+                        isEditing
+                          ? 'border-amber-500 bg-amber-500/10 z-20'
+                          : 'border-yellow-500/20 hover:border-yellow-500/40 z-10'
+                      }`}
+                      style={{ left: leftPx, width: widthPx }}
+                    >
+                      {isEditing ? (
+                        <div className="flex flex-col gap-0.5">
+                          <input
+                            value={editingSubText}
+                            onChange={(e) => setEditingSubText(e.target.value)}
+                            className="w-full bg-black/50 border border-amber-500/50 text-white text-[10px] px-1 py-0.5 rounded outline-none"
+                            autoFocus
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') handleSaveSubtitle(sub.id);
+                              if (e.key === 'Escape') setEditingSubId(null);
+                            }}
+                          />
+                          <div className="flex justify-end gap-1">
+                            <button
+                              onClick={() => setEditingSubId(null)}
+                              className="px-1.5 py-[1px] bg-slate-800 text-[8px] rounded text-slate-300"
+                            >
+                              Hủy
+                            </button>
+                            <button
+                              onClick={() => handleSaveSubtitle(sub.id)}
+                              className="px-1.5 py-[1px] bg-amber-500 text-[8px] rounded text-black font-bold"
+                            >
+                              Lưu
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <p
+                          onClick={() => {
+                            setEditingSubId(sub.id);
+                            setEditingSubText(sub.text);
+                          }}
+                          className="text-[10px] text-slate-200 font-medium truncate cursor-pointer hover:text-amber-300 leading-tight"
+                          title={`${sub.start.toFixed(1)}s - ${sub.end.toFixed(1)}s | Click để sửa`}
+                        >
+                          {sub.text}
+                        </p>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* ── Playhead (red vertical line) ── */}
+              {playheadTimeSec >= 0 && playheadTimeSec <= totalDuration && (
+                <div
+                  className="absolute top-0 bottom-0 pointer-events-none z-30"
+                  style={{ left: playheadPx }}
+                >
+                  {/* Playhead triangle marker */}
+                  <div
+                    className="absolute -top-0 -translate-x-1/2"
+                    style={{
+                      width: 0,
+                      height: 0,
+                      borderLeft: '5px solid transparent',
+                      borderRight: '5px solid transparent',
+                      borderTop: '7px solid #ef4444',
+                    }}
+                  />
+                  {/* Playhead vertical line */}
+                  <div className="w-[2px] h-full bg-red-500 -translate-x-[1px] shadow-[0_0_6px_rgba(239,68,68,0.5)]" />
+                </div>
+              )}
             </div>
           </div>
         </div>
       </div>
 
-      {/* RENDER PROGRESS MODAL */}
+      {/* ════════ RENDER PROGRESS MODAL ════════ */}
       {rendering && (
         <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-6">
           <div className="bg-[#151D2E] border border-amber-500/40 rounded-3xl p-8 max-w-md w-full text-center shadow-2xl">

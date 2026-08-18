@@ -37,33 +37,29 @@ export interface TimelineClipItem {
   mediaType?: 'video' | 'image';
 }
 
-
 export interface StorylineGenerationResult {
   totalDuration: number;
   clips: TimelineClipItem[];
 }
 
-const STAGE_ORDER = [
-  'STAGE_1_RAW_CARPENTRY',
-  'STAGE_2_ASSEMBLY_FINISHING',
-  'STAGE_3_DECOR_FLOWERS',
-  'STAGE_4_WORSHIP_ALTAR',
-] as const;
-
 /**
- * Thuật toán lắp ráp kịch bản 4 giai đoạn tự động, thích ứng với dữ liệu thực tế
+ * Thuật toán phân bổ clip 4 giai đoạn tự động, chuẩn tiến trình không gian thờ Phật:
+ * - 0% - 20%: Stage 1 (Thi công thô / Khung tủ)
+ * - 20% - 50%: Stage 2 (Lắp ráp hoàn thiện / Vách ngăn CNC)
+ * - 50% - 75%: Stage 3 (Cắm hoa sen, hoa huệ, bày mâm bồng, tượng Phật)
+ * - 75% - 100%: Stage 4 (Bật đèn hào quang sáng rực, không gian thờ trang nghiêm, lễ Phật)
  */
 export function generateStoryline(
   sourceClips: SourceClipRecord[],
   targetDuration: number,
-  minClipSec: number = 3.0,
-  maxClipSec: number = 4.5
+  minClipSec: number = 4.0,
+  maxClipSec: number = 5.5
 ): StorylineGenerationResult {
-  if (!sourceClips || sourceClips.length === 0) {
+  if (!sourceClips || sourceClips.length === 0 || targetDuration <= 0) {
     return { totalDuration: targetDuration, clips: [] };
   }
 
-  // Chuẩn hóa và nhóm clip theo 4 giai đoạn và sắp xếp theo điểm thẩm mỹ cao nhất trước
+  // 1. Chuẩn hóa danh sách source clips
   const normalizedSources: SourceClipRecord[] = sourceClips.map((s: any) => ({
     id: s.id,
     projectId: s.projectId || s.project_id,
@@ -80,6 +76,7 @@ export function generateStoryline(
     mediaType: s.mediaType || (isImageFile(s.filePath || s.file_path) ? 'image' : 'video'),
   }));
 
+  // 2. Nhóm source theo 4 giai đoạn
   const clipsByStage: Record<string, SourceClipRecord[]> = {
     STAGE_1_RAW_CARPENTRY: [],
     STAGE_2_ASSEMBLY_FINISHING: [],
@@ -95,128 +92,125 @@ export function generateStoryline(
     clipsByStage[stage].push(clip);
   });
 
-  // Sort mỗi stage theo aesthetic score giảm dần
+  // Sắp xếp trong từng stage theo điểm thẩm mỹ (aestheticScore) giảm dần
   Object.keys(clipsByStage).forEach((stageKey) => {
     clipsByStage[stageKey].sort((a, b) => (b.aestheticScore || 0) - (a.aestheticScore || 0));
   });
 
-  // Tìm các stage thực tế có clip
-  const availableStages = STAGE_ORDER.filter((s) => clipsByStage[s].length > 0);
-
-  // Nếu không có stage nào khớp, dùng toàn bộ clip
-  if (availableStages.length === 0) {
-    availableStages.push('STAGE_2_ASSEMBLY_FINISHING');
-    clipsByStage['STAGE_2_ASSEMBLY_FINISHING'] = [...normalizedSources];
-  }
-
-  // Tính tỷ lệ thời lượng cho từng stage có sẵn
-  const stageWeights: Record<string, number> = {};
-  if (availableStages.length === 4) {
-    stageWeights['STAGE_1_RAW_CARPENTRY'] = 0.20;
-    stageWeights['STAGE_2_ASSEMBLY_FINISHING'] = 0.25;
-    stageWeights['STAGE_3_DECOR_FLOWERS'] = 0.25;
-    stageWeights['STAGE_4_WORSHIP_ALTAR'] = 0.30;
-  } else {
-    // Phân bổ đều theo tỷ lệ các stage hiện có
-    const equalWeight = 1.0 / availableStages.length;
-    availableStages.forEach((s) => {
-      stageWeights[s] = equalWeight;
-    });
-  }
+  // 3. Tính số lượng clip cần thiết để lấp đầy targetDuration
+  const idealClipDur = Math.max(minClipSec, Math.min(maxClipSec, 5.0));
+  const estimatedClipsCount = Math.max(1, Math.round(targetDuration / idealClipDur));
+  const exactClipDur = targetDuration / estimatedClipsCount;
 
   const timelineClips: TimelineClipItem[] = [];
   let currentTimelineTime = 0;
   let clipIndexCounter = 1;
+  let lastUsedSourceId = '';
+  const videoUsageCount: Record<string, number> = {};
+  const stageCursors: Record<string, number> = {
+    STAGE_1_RAW_CARPENTRY: 0,
+    STAGE_2_ASSEMBLY_FINISHING: 0,
+    STAGE_3_DECOR_FLOWERS: 0,
+    STAGE_4_WORSHIP_ALTAR: 0,
+  };
 
-  for (const stage of availableStages) {
-    const stageClips = clipsByStage[stage];
-    const stageTargetDuration = targetDuration * (stageWeights[stage] || 0.25);
-    const stageEndTime = Math.min(currentTimelineTime + stageTargetDuration, targetDuration);
-
-    let stageCurrentTime = currentTimelineTime;
-    let clipPoolIndex = 0;
-
-    while (stageCurrentTime < stageEndTime && stageCurrentTime < targetDuration) {
-      const source = stageClips[clipPoolIndex % stageClips.length];
-      clipPoolIndex++;
-
-      // Tính thời lượng cho đoạn cut này
-      const remainingInStage = stageEndTime - stageCurrentTime;
-      const desiredDuration = Math.min(
-        maxClipSec,
-        Math.max(minClipSec, Math.random() * (maxClipSec - minClipSec) + minClipSec)
-      );
-      const cutDuration = Math.min(desiredDuration, remainingInStage, targetDuration - stageCurrentTime);
-
-      if (cutDuration < 0.5) break;
-
-      // Điểm bắt đầu cắt trong file gốc
-      const isImg = source.mediaType === 'image' || isImageFile(source.filePath);
-      const maxSourceStart = isImg ? 0 : Math.max(0, (source.duration || 10) - cutDuration);
-      const sourceStart = isImg ? 0 : Math.min(Math.random() * maxSourceStart, maxSourceStart);
-
-      timelineClips.push({
-        id: `clip_${clipIndexCounter++}`,
-        sourceId: source.id,
-        fileName: source.fileName,
-        filePath: source.filePath,
-        thumbnailPath: source.thumbnailPath,
-        stage: source.stage,
-        timelineStart: Number(stageCurrentTime.toFixed(2)),
-        timelineEnd: Number((stageCurrentTime + cutDuration).toFixed(2)),
-        sourceStart: Number(sourceStart.toFixed(2)),
-        sourceDuration: Number(cutDuration.toFixed(2)),
-        aspectRatioType: source.aspectRatioType,
-        mediaType: isImg ? 'image' : 'video',
-      });
-
-      stageCurrentTime += cutDuration;
+  for (let clipIdx = 0; clipIdx < estimatedClipsCount; clipIdx++) {
+    // Xác định thời lượng cho clip này
+    let cutDuration = exactClipDur;
+    if (clipIdx === estimatedClipsCount - 1) {
+      // Clip cuối cùng gánh toàn bộ phần dư còn lại để khớp 100% targetDuration
+      cutDuration = Math.max(0.1, targetDuration - currentTimelineTime);
     }
 
-    currentTimelineTime = stageCurrentTime;
+    const progressRatio = (currentTimelineTime + cutDuration / 2) / targetDuration;
+
+    // Xác định stage ưu tiên theo tiến trình thời gian
+    let preferredStage: 'STAGE_1_RAW_CARPENTRY' | 'STAGE_2_ASSEMBLY_FINISHING' | 'STAGE_3_DECOR_FLOWERS' | 'STAGE_4_WORSHIP_ALTAR';
+    if (progressRatio <= 0.20) {
+      preferredStage = 'STAGE_1_RAW_CARPENTRY';
+    } else if (progressRatio <= 0.50) {
+      preferredStage = 'STAGE_2_ASSEMBLY_FINISHING';
+    } else if (progressRatio <= 0.75) {
+      preferredStage = 'STAGE_3_DECOR_FLOWERS';
+    } else {
+      preferredStage = 'STAGE_4_WORSHIP_ALTAR';
+    }
+
+    // Tìm danh sách ứng viên từ stage ưu tiên, nếu trống thì tìm các stage lân cận
+    let candidates = clipsByStage[preferredStage];
+    if (!candidates || candidates.length === 0) {
+      if (preferredStage === 'STAGE_1_RAW_CARPENTRY') {
+        candidates = clipsByStage['STAGE_2_ASSEMBLY_FINISHING'].length > 0
+          ? clipsByStage['STAGE_2_ASSEMBLY_FINISHING']
+          : normalizedSources;
+      } else if (preferredStage === 'STAGE_4_WORSHIP_ALTAR') {
+        candidates = clipsByStage['STAGE_3_DECOR_FLOWERS'].length > 0
+          ? clipsByStage['STAGE_3_DECOR_FLOWERS']
+          : (clipsByStage['STAGE_2_ASSEMBLY_FINISHING'].length > 0 ? clipsByStage['STAGE_2_ASSEMBLY_FINISHING'] : normalizedSources);
+      } else {
+        candidates = normalizedSources;
+      }
+    }
+
+    // Chọn candidate tốt nhất, tránh lặp liền kề với clip trước nếu có >= 2 clip trong pool
+    let candidate = candidates[0];
+    const cursor = stageCursors[preferredStage] || 0;
+    if (candidates.length > 1) {
+      let chosenIdx = cursor % candidates.length;
+      if (candidates[chosenIdx].id === lastUsedSourceId) {
+        chosenIdx = (chosenIdx + 1) % candidates.length;
+      }
+      candidate = candidates[chosenIdx];
+      stageCursors[preferredStage] = chosenIdx + 1;
+    } else {
+      candidate = candidates[0];
+    }
+
+    lastUsedSourceId = candidate.id;
+
+    const isImg = candidate.mediaType === 'image' || isImageFile(candidate.filePath);
+    let sourceStart = 0;
+
+    if (!isImg && candidate.duration > cutDuration) {
+      // Đối với video dài: mỗi lần lặp lại sẽ cắt ở một phân đoạn thời gian khác nhau
+      const usageIndex = videoUsageCount[candidate.id] || 0;
+      videoUsageCount[candidate.id] = usageIndex + 1;
+
+      const maxStart = Math.max(0, candidate.duration - cutDuration);
+      const step = maxStart > 0 ? maxStart / 3 : 0;
+      sourceStart = Math.min(maxStart, (usageIndex * step) % (maxStart + 0.1));
+    }
+
+    const tStart = Number(currentTimelineTime.toFixed(2));
+    const tEnd = Number((currentTimelineTime + cutDuration).toFixed(2));
+
+    timelineClips.push({
+      id: `clip_${clipIndexCounter++}`,
+      sourceId: candidate.id,
+      fileName: candidate.fileName,
+      filePath: candidate.filePath,
+      thumbnailPath: candidate.thumbnailPath,
+      stage: candidate.stage,
+      timelineStart: tStart,
+      timelineEnd: tEnd,
+      sourceStart: Number(sourceStart.toFixed(2)),
+      sourceDuration: Number(cutDuration.toFixed(2)),
+      aspectRatioType: candidate.aspectRatioType,
+      mediaType: isImg ? 'image' : 'video',
+    });
+
+    currentTimelineTime += cutDuration;
   }
 
-  // Nếu còn thiếu thời lượng so với voice, bổ sung thêm từ các clip đẹp nhất của stage 4 hoặc bất kỳ clip nào
-  if (currentTimelineTime < targetDuration) {
-    const remaining = targetDuration - currentTimelineTime;
-    const bestClips = clipsByStage['STAGE_4_WORSHIP_ALTAR'].length > 0
-      ? clipsByStage['STAGE_4_WORSHIP_ALTAR']
-      : normalizedSources;
-
-    let poolIdx = 0;
-    let extraTime = currentTimelineTime;
-
-    while (extraTime < targetDuration) {
-      const source = bestClips[poolIdx % bestClips.length];
-      poolIdx++;
-
-      const cutDuration = Math.min(maxClipSec, targetDuration - extraTime);
-      if (cutDuration < 0.2) break;
-
-      const isImg = source.mediaType === 'image' || isImageFile(source.filePath);
-
-      timelineClips.push({
-        id: `clip_${clipIndexCounter++}`,
-        sourceId: source.id,
-        fileName: source.fileName,
-        filePath: source.filePath,
-        thumbnailPath: source.thumbnailPath,
-        stage: source.stage,
-        timelineStart: Number(extraTime.toFixed(2)),
-        timelineEnd: Number((extraTime + cutDuration).toFixed(2)),
-        sourceStart: 0,
-        sourceDuration: Number(cutDuration.toFixed(2)),
-        aspectRatioType: source.aspectRatioType,
-        mediaType: isImg ? 'image' : 'video',
-      });
-
-      extraTime += cutDuration;
-    }
+  // Đảm bảo clip cuối cùng chạm chính xác 100% targetDuration
+  if (timelineClips.length > 0) {
+    const last = timelineClips[timelineClips.length - 1];
+    last.timelineEnd = Number(targetDuration.toFixed(2));
+    last.sourceDuration = Number((last.timelineEnd - last.timelineStart).toFixed(2));
   }
 
   return {
-    totalDuration: targetDuration,
+    totalDuration: Number(targetDuration.toFixed(2)),
     clips: timelineClips,
   };
 }
-

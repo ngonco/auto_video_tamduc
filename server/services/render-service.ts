@@ -3,6 +3,26 @@ import path from 'path';
 import fs from 'fs';
 import { SubtitleLine } from './subtitle-fixer.js';
 import { TimelineClipItem } from './storyline-engine.js';
+import { getVideoMetadata } from './ffmpeg.js';
+
+async function runWithConcurrency<T, R>(
+  items: T[],
+  concurrency: number,
+  fn: (item: T, index: number) => Promise<R>
+): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let currentIndex = 0;
+
+  const workers = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
+    while (currentIndex < items.length) {
+      const idx = currentIndex++;
+      results[idx] = await fn(items[idx], idx);
+    }
+  });
+
+  await Promise.all(workers);
+  return results;
+}
 
 export interface RenderRequest {
   videoId: string;
@@ -46,7 +66,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     const startStr = formatAssTime(line.start);
     const endStr = formatAssTime(line.end);
 
-    // Xây dựng chuỗi Karaoke tag {\k<centiseconds>} cho từng từ
+    // Xây dựng chuỗi Karaoke tag {\kf<centiseconds>} cho từng từ
     let karaokeText = '';
     line.words.forEach((w) => {
       const durationCenti = Math.max(1, Math.round((w.end - w.start) * 100));
@@ -82,79 +102,77 @@ export async function renderFinalVideo(
   req: RenderRequest,
   onProgress?: (percent: number, message: string) => void
 ): Promise<string> {
-  const tempDir = path.resolve(process.cwd(), '.cache', 'render_temp', req.videoId);
+  const finalFileName = `Video_TamDuc_${Date.now()}.mp4`;
+  const finalOutputPath = path.join(req.outputDir, finalFileName);
+
+  const tempDir = path.join(process.cwd(), '.cache', 'render', `job_${Date.now()}`);
   if (!fs.existsSync(tempDir)) {
     fs.mkdirSync(tempDir, { recursive: true });
   }
 
-  if (!fs.existsSync(req.outputDir)) {
-    fs.mkdirSync(req.outputDir, { recursive: true });
+  // 1. Sinh file phụ đề ASS Karaoke
+  if (onProgress) {
+    onProgress(5, 'Đang chuẩn bị file phụ đề Karaoke tiếng Việt...');
   }
-
-  const outFileName = `Video_TamDuc_${Date.now()}.mp4`;
-  const finalOutputPath = path.join(req.outputDir, outFileName);
-
-  // 1. Sinh file phụ đề .ass
   const assPath = path.join(tempDir, 'subtitles.ass');
   generateAssKaraokeSubtitleFile(req.subtitles, assPath);
 
-  // 2. Cắt và chuẩn hóa từng clip thành 1080x1920
-  // (Ảnh: Tạo chuyển động Ken Burns zoom nhẹ 1.0x -> 1.12x; Video: Làm mờ nền nếu là 16:9)
-  const normalizedClipPaths: string[] = [];
-  const clipDurations: number[] = [];
-  let clipIdx = 0;
-
-  for (const clip of req.clips) {
-    if (onProgress) {
-      const pct = Math.round((clipIdx / req.clips.length) * 40);
-      onProgress(pct, `Đang xử lý chuẩn hóa clip ${clipIdx + 1}/${req.clips.length}...`);
+  // 2. Lấy thời lượng Voice chính xác
+  let exactVoiceDuration = 60;
+  try {
+    const voiceMeta = await getVideoMetadata(req.voicePath);
+    if (voiceMeta.duration && voiceMeta.duration > 0) {
+      exactVoiceDuration = voiceMeta.duration;
     }
+  } catch (_) {}
 
+  // 3. Cắt và chuẩn hóa từng clip song song (Parallel Worker Pool)
+  const transDur = 0.5; // 0.5s chuyển cảnh hòa tan
+  let completedClips = 0;
+
+  const normalizedClips = await runWithConcurrency(req.clips, 4, async (clip, clipIdx) => {
     const isImage = clip.mediaType === 'image' || isImageFile(clip.filePath);
     const outClip = path.join(tempDir, `norm_clip_${clipIdx}.mp4`);
-    const duration = Math.max(1.0, clip.sourceDuration || 3.5);
+    const isLast = clipIdx === req.clips.length - 1;
+    const duration = Math.max(1.0, (clip.sourceDuration || 5.0) + (isLast ? 0 : transDur));
 
     await new Promise<void>((resolve, reject) => {
-      let command = ffmpeg(clip.filePath);
+      let command = ffmpeg();
 
       if (isImage) {
-        // --- XỬ LÝ ẢNH TĨNH: HIỆU ỨNG ZOOM NHẸ (KEN BURNS) ---
-        command.inputOptions(['-loop 1', `-t ${duration}`]);
+        // Xử lý Ảnh tĩnh: Lặp ảnh và phóng to nhẹ Ken Burns
+        command
+          .input(clip.filePath)
+          .inputOptions(['-loop 1', `-t ${duration}`]);
 
-        let filterString = '';
-        if (clip.aspectRatioType === '16:9') {
-          // Ảnh ngang: Nền mờ phóng to nhẹ + Ảnh nét trung tâm zoom nhẹ
-          filterString = `[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=20:5,scale=w='1080*(1+0.06*t/${duration})':h='1920*(1+0.06*t/${duration})':eval=frame,crop=1080:1920:(iw-1080)/2:(ih-1920)/2[bg];[0:v]scale=1080:-1[fg];[bg][fg]overlay=(W-w)/2:(H-h)/2,setsar=1,fps=30,scale=in_range=full:out_range=tv,format=yuv420p[outv]`;
-        } else {
-          // Ảnh dọc 9:16: Zoom mượt từ 1.0x lên 1.10x từ tâm
-          filterString = `[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,scale=w='1080*(1+0.10*t/${duration})':h='1920*(1+0.10*t/${duration})':eval=frame,crop=1080:1920:(iw-1080)/2:(ih-1920)/2,setsar=1,fps=30,scale=in_range=full:out_range=tv,format=yuv420p[outv]`;
-        }
+        const filterString = clip.aspectRatioType === '16:9' 
+          ? `[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=20:5,scale=w='1080*(1+0.06*t/${duration})':h='1920*(1+0.06*t/${duration})':eval=frame,crop=1080:1920:(iw-1080)/2:(ih-1920)/2[bg];[0:v]scale=1080:-1[fg];[bg][fg]overlay=(W-w)/2:(H-h)/2,setsar=1,fps=30,scale=in_range=full:out_range=tv,format=yuv420p[outv]`
+          : `[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,scale=w='1080*(1+0.10*t/${duration})':h='1920*(1+0.10*t/${duration})':eval=frame,crop=1080:1920:(iw-1080)/2:(ih-1920)/2,setsar=1,fps=30,scale=in_range=full:out_range=tv,format=yuv420p[outv]`;
 
         command
           .complexFilter(filterString)
           .noAudio()
-          .outputOptions(['-map [outv]', '-c:v libx264', '-preset veryfast', '-crf 20', '-pix_fmt yuv420p', `-t ${duration}`])
+          .outputOptions(['-map [outv]', '-c:v libx264', '-preset ultrafast', '-threads 0', '-tune fastdecode', '-crf 22', '-pix_fmt yuv420p', `-t ${duration}`])
           .output(outClip)
           .on('end', () => resolve())
           .on('error', (err) => reject(err))
           .run();
       } else {
-        // --- XỬ LÝ VIDEO CLIP ---
-        let filterString = '';
-        if (clip.aspectRatioType === '16:9') {
-          // Clip ngang: Làm mờ nền 1080x1920 + Đặt clip nét ở giữa
-          filterString = `[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=20:5[bg];[0:v]scale=1080:-1[fg];[bg][fg]overlay=(W-w)/2:(H-h)/2,setsar=1,fps=30,format=yuv420p[outv]`;
-        } else {
-          // Clip dọc: Scale fill 1080x1920
-          filterString = `[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1,fps=30,format=yuv420p[outv]`;
-        }
+        // Xử lý Video clip: Sử dụng -stream_loop -1 để đảm bảo clip ngắn không bị thiếu frame
+        command
+          .inputOptions(['-stream_loop -1'])
+          .input(clip.filePath)
+          .setStartTime(clip.sourceStart || 0)
+          .setDuration(duration);
+
+        const filterString = clip.aspectRatioType === '16:9'
+          ? `[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=20:5[bg];[0:v]scale=1080:-1[fg];[bg][fg]overlay=(W-w)/2:(H-h)/2,setsar=1,fps=30,format=yuv420p[outv]`
+          : `[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1,fps=30,format=yuv420p[outv]`;
 
         command
-          .setStartTime(clip.sourceStart || 0)
-          .setDuration(duration)
           .complexFilter(filterString)
           .noAudio()
-          .outputOptions(['-map [outv]', '-c:v libx264', '-preset veryfast', '-crf 20', '-pix_fmt yuv420p'])
+          .outputOptions(['-map [outv]', '-c:v libx264', '-preset ultrafast', '-threads 0', '-tune fastdecode', '-crf 22', '-pix_fmt yuv420p', `-t ${duration}`])
           .output(outClip)
           .on('end', () => resolve())
           .on('error', (err) => reject(err))
@@ -162,14 +180,20 @@ export async function renderFinalVideo(
       }
     });
 
-    normalizedClipPaths.push(outClip);
-    clipDurations.push(duration);
-    clipIdx++;
-  }
+    completedClips++;
+    if (onProgress) {
+      const pct = 5 + Math.round((completedClips / req.clips.length) * 45);
+      onProgress(pct, `Đang xử lý song song chuẩn hóa clip ${completedClips}/${req.clips.length}...`);
+    }
 
-  // 3. Ghép nối toàn bộ các clip với HIỆU ỨNG CHUYỂN CẢNH CROSS DISSOLVE (xfade)
+    return { path: outClip, duration };
+  });
+
+  const normalizedClipPaths = normalizedClips.map((c) => c.path);
+  const clipDurations = normalizedClips.map((c) => c.duration);
+
   if (onProgress) {
-    onProgress(50, 'Đang hòa trộn chuyển cảnh Cross Dissolve giữa các video...');
+    onProgress(55, 'Đang hòa trộn chuyển cảnh Cross Dissolve giữa các clip...');
   }
 
   const stitchedVideoPath = path.join(tempDir, 'stitched.mp4');
@@ -177,7 +201,6 @@ export async function renderFinalVideo(
   if (normalizedClipPaths.length === 1) {
     fs.copyFileSync(normalizedClipPaths[0], stitchedVideoPath);
   } else {
-    const transDur = 0.5; // 0.5 giây chuyển cảnh hòa tan
     let concatCommand = ffmpeg();
     normalizedClipPaths.forEach((p) => concatCommand.input(p));
 
@@ -196,12 +219,13 @@ export async function renderFinalVideo(
       currentAccumulated = currentAccumulated + clipDurations[i] - actualTrans;
     }
 
-    filterChains.push(`[v_xfade_end]format=yuv420p[outv]`);
+    // Thêm tpad để đảm bảo khung hình cuối cùng giữ nguyên, không bao giờ bị cắt đen trước khi tiếng dứt
+    filterChains.push(`[v_xfade_end]tpad=stop_mode=clone:stop_duration=5,format=yuv420p[outv]`);
 
     await new Promise<void>((resolve, reject) => {
       concatCommand
         .complexFilter(filterChains.join('; '))
-        .outputOptions(['-map [outv]', '-c:v libx264', '-preset veryfast', '-crf 20', '-pix_fmt yuv420p'])
+        .outputOptions(['-map [outv]', '-c:v libx264', '-preset ultrafast', '-threads 0', '-crf 20', '-pix_fmt yuv420p'])
         .output(stitchedVideoPath)
         .on('end', () => resolve())
         .on('error', (err) => reject(err))
@@ -209,9 +233,6 @@ export async function renderFinalVideo(
     });
   }
 
-
-
-  // 4. Ghép Âm thanh (Voice + BGM Ducking) và Burn Subtitle Karaoke
   if (onProgress) {
     onProgress(75, 'Đang hòa âm Voice, Nhạc Thiền BGM và ép phụ đề Karaoke 9:16...');
   }
@@ -226,7 +247,6 @@ export async function renderFinalVideo(
       command = command.input(req.bgmPath!);
     }
 
-    // Bộ lọc âm thanh và phụ đề
     const voiceVol = req.voiceVolume || 1.0;
     const bgmVol = req.bgmVolume || 0.15;
 
@@ -244,7 +264,8 @@ export async function renderFinalVideo(
         '-map [outv]',
         '-map [outa]',
         '-c:v libx264',
-        '-preset medium',
+        '-preset faster',
+        '-threads 0',
         '-crf 18',
         '-profile:v high',
         '-level 4.1',
@@ -252,9 +273,8 @@ export async function renderFinalVideo(
         '-c:a aac',
         '-b:a 192k',
         '-ar 44100',
-        '-shortest',
+        `-t ${exactVoiceDuration.toFixed(2)}`,
       ])
-
       .output(finalOutputPath)
       .on('progress', (progress) => {
         if (onProgress && progress.percent) {
@@ -267,7 +287,6 @@ export async function renderFinalVideo(
       .run();
   });
 
-  // Dọn dẹp temp
   try {
     fs.rmSync(tempDir, { recursive: true, force: true });
   } catch (_) {}

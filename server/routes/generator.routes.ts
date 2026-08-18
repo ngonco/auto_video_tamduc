@@ -6,8 +6,9 @@ import { execFile } from 'child_process';
 import { v4 as uuidv4 } from 'uuid';
 import { db } from '../db.js';
 import { transcribeAudio } from '../services/stt-service.js';
-import { polishAndSegmentSubtitles } from '../services/subtitle-fixer.js';
+import { polishAndSegmentSubtitles, segmentAndPolishSubtitles } from '../services/subtitle-fixer.js';
 import { generateStoryline, SourceClipRecord } from '../services/storyline-engine.js';
+import { getVideoMetadata } from '../services/ffmpeg.js';
 
 const UPLOAD_DIR = path.resolve(process.cwd(), '.cache', 'uploads');
 if (!fs.existsSync(UPLOAD_DIR)) {
@@ -90,11 +91,25 @@ generatorRouter.post('/pick-voice', (req, res) => {
 generatorRouter.get('/voices', (req, res) => {
   try {
     const voices = db.prepare(`SELECT * FROM voices ORDER BY created_at DESC`).all();
-    const formatted = voices.map((v: any) => ({
-      ...v,
-      raw_words: v.raw_words_json ? JSON.parse(v.raw_words_json) : [],
-      subtitles: v.subtitles_json ? JSON.parse(v.subtitles_json) : [],
-    }));
+    const formatted = voices.map((v: any) => {
+      const rawWords = v.raw_words_json ? JSON.parse(v.raw_words_json) : [];
+      let subs = v.subtitles_json ? JSON.parse(v.subtitles_json) : [];
+
+      // Tự động kiểm tra & sửa chữa nếu phụ đề cũ bị ngắn/lệch so với thời lượng Voice
+      const lastSubEnd = subs.length > 0 ? subs[subs.length - 1].end : 0;
+      if (rawWords.length > 0 && (subs.length === 0 || (v.duration > 5 && lastSubEnd < v.duration * 0.85))) {
+        subs = segmentAndPolishSubtitles(rawWords);
+        try {
+          db.prepare(`UPDATE voices SET subtitles_json = ? WHERE id = ?`).run(JSON.stringify(subs), v.id);
+        } catch (_) {}
+      }
+
+      return {
+        ...v,
+        raw_words: rawWords,
+        subtitles: subs,
+      };
+    });
     res.json({ success: true, data: formatted });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.message });
@@ -123,6 +138,17 @@ generatorRouter.post('/process-voice', async (req, res) => {
     // Kiểm tra xem voice đã từng được xử lý trong database chưa để trả kết quả ngay (instant cache)
     const existing: any = db.prepare(`SELECT * FROM voices WHERE file_path = ?`).get(filePath);
     if (existing && existing.subtitles_json) {
+      const rawWords = existing.raw_words_json ? JSON.parse(existing.raw_words_json) : [];
+      let subs = existing.subtitles_json ? JSON.parse(existing.subtitles_json) : [];
+
+      const lastSubEnd = subs.length > 0 ? subs[subs.length - 1].end : 0;
+      if (rawWords.length > 0 && (subs.length === 0 || (existing.duration > 5 && lastSubEnd < existing.duration * 0.85))) {
+        subs = segmentAndPolishSubtitles(rawWords);
+        try {
+          db.prepare(`UPDATE voices SET subtitles_json = ? WHERE id = ?`).run(JSON.stringify(subs), existing.id);
+        } catch (_) {}
+      }
+
       return res.json({
         success: true,
         cached: true,
@@ -130,8 +156,8 @@ generatorRouter.post('/process-voice', async (req, res) => {
           id: existing.id,
           rawText: existing.stt_text,
           duration: existing.duration,
-          words: existing.raw_words_json ? JSON.parse(existing.raw_words_json) : [],
-          subtitles: existing.subtitles_json ? JSON.parse(existing.subtitles_json) : [],
+          words: rawWords,
+          subtitles: subs,
         },
       });
     }
@@ -139,6 +165,15 @@ generatorRouter.post('/process-voice', async (req, res) => {
     console.log('[Generator] Starting STT transcription on:', filePath);
     // Bước 1: Whisper STT lấy word timestamps
     const sttResult = await transcribeAudio(filePath);
+
+    // Lấy thời lượng thực tế chuẩn xác của file voice
+    let accurateDuration = sttResult.duration;
+    try {
+      const audioMeta = await getVideoMetadata(filePath);
+      if (audioMeta.duration && audioMeta.duration > 0) {
+        accurateDuration = audioMeta.duration;
+      }
+    } catch (_) {}
 
     console.log('[Generator] Polishing subtitles with LLM...');
     // Bước 2: Gemini LLM chuẩn hóa từ ngữ Phật pháp và ngắt câu 9:16
@@ -160,7 +195,7 @@ generatorRouter.post('/process-voice', async (req, res) => {
       voiceId,
       fileName,
       filePath,
-      sttResult.duration,
+      accurateDuration,
       sttResult.text,
       JSON.stringify(sttResult.words),
       JSON.stringify(polishedSubtitles)
@@ -171,7 +206,7 @@ generatorRouter.post('/process-voice', async (req, res) => {
       data: {
         id: voiceId,
         rawText: sttResult.text,
-        duration: sttResult.duration,
+        duration: accurateDuration,
         words: sttResult.words,
         subtitles: polishedSubtitles,
       },
