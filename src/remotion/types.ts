@@ -25,6 +25,7 @@ export interface TimelineClipItem {
   sourceDuration: number;// giây
   aspectRatioType: '9:16' | '16:9' | 'other';
   mediaType?: 'video' | 'image';
+  isOutro?: boolean;
 }
 
 export interface SourceClipRecord {
@@ -43,7 +44,6 @@ export interface SourceClipRecord {
   mediaType?: 'video' | 'image';
 }
 
-
 export interface MainVideoProps {
   durationInFrames: number;
   fps: number;
@@ -58,4 +58,8 @@ export interface MainVideoProps {
   fontFamily?: string;
   activeWordColor?: string;
   inactiveWordColor?: string;
+  voiceDuration?: number;
+  outroPath?: string;
+  outroDuration?: number;
+  outroEnabled?: boolean;
 }

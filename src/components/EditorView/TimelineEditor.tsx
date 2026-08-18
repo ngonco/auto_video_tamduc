@@ -53,6 +53,12 @@ interface TimelineEditorProps {
     subtitles: SubtitleLine[];
     clips: TimelineClipItem[];
     availableSources?: SourceClipRecord[];
+    outro?: {
+      filePath: string;
+      fileName: string;
+      duration: number;
+      enabled: boolean;
+    } | null;
   };
   onUpdateClips: (clips: TimelineClipItem[]) => void;
   onUpdateSubtitles: (subtitles: SubtitleLine[]) => void;
@@ -300,6 +306,13 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
   // Selected clip state
   const [selectedClipId, setSelectedClipId] = useState<string | null>(null);
 
+  // Outro State
+  const [outroEnabled, setOutroEnabled] = useState<boolean>(timelineData.outro?.enabled ?? true);
+  const [outroPath, setOutroPath] = useState<string>(timelineData.outro?.filePath ?? '');
+  const [outroFileName, setOutroFileName] = useState<string>(timelineData.outro?.fileName ?? '');
+  const [outroDuration, setOutroDuration] = useState<number>(timelineData.outro?.duration ?? 0);
+  const [browsingOutro, setBrowsingOutro] = useState<boolean>(false);
+
   // Project source selector modal state
   const [showSourceModal, setShowSourceModal] = useState<boolean>(false);
   const [replacingClipId, setReplacingClipId] = useState<string | null>(null);
@@ -330,9 +343,50 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
   // Ref for the timeline bottom area (for native wheel listener)
   const timelineAreaRef = useRef<HTMLDivElement>(null);
 
+  // ── Fetch default Outro if not provided ──
+  useEffect(() => {
+    if (!timelineData.outro && !outroPath) {
+      fetch('/api/settings')
+        .then((res) => res.json())
+        .then((data) => {
+          if (data.success && data.data.defaultOutroPath) {
+            setOutroPath(data.data.defaultOutroPath);
+            setOutroFileName(data.data.defaultOutroPath.split(/[\\/]/).pop() || 'Outro_TamDuc.mp4');
+            setOutroDuration(data.data.outroDuration || 5.0);
+            setOutroEnabled(data.data.outroEnabled ?? true);
+          }
+        })
+        .catch(() => {});
+    }
+  }, [timelineData.outro, outroPath]);
+
+  const handleChangeOutroFile = async () => {
+    setBrowsingOutro(true);
+    try {
+      const res = await fetch('/api/settings/browse-video', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ initialPath: outroPath }),
+      });
+      const data = await res.json();
+      if (data.success && data.selectedPath) {
+        setOutroPath(data.selectedPath);
+        setOutroFileName(data.fileName || data.selectedPath.split(/[\\/]/).pop() || 'Outro_TamDuc.mp4');
+        setOutroDuration(data.duration || 5.0);
+        setOutroEnabled(true);
+      }
+    } catch (err) {
+      console.error('[TimelineEditor] Error browsing outro video:', err);
+    } finally {
+      setBrowsingOutro(false);
+    }
+  };
+
   const fps = 30;
-  const durationInFrames = Math.max(30, Math.ceil(timelineData.duration * fps));
-  const totalDuration = timelineData.duration;
+  const voiceDuration = timelineData.duration;
+  const isOutroActive = outroEnabled && Boolean(outroPath) && outroDuration > 0;
+  const totalDuration = voiceDuration + (isOutroActive ? outroDuration : 0);
+  const durationInFrames = Math.max(30, Math.ceil(totalDuration * fps));
   const pxPerSec = BASE_PX_PER_SEC * zoomLevel;
   const trackWidth = totalDuration * pxPerSec;
 
@@ -768,6 +822,9 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
           voiceVolume,
           clips: timelineData.clips,
           subtitles: timelineData.subtitles,
+          outroPath: isOutroActive ? outroPath : undefined,
+          outroEnabled: isOutroActive,
+          outroDuration: isOutroActive ? outroDuration : 0,
         }),
       });
 
@@ -863,6 +920,27 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
   const playheadTimeSec = currentFrame / fps;
   const playheadPx = playheadTimeSec * pxPerSec;
 
+  // ── All clips including Outro if enabled ──
+  const allClipsWithOutro: TimelineClipItem[] = useMemo(() => {
+    if (!isOutroActive) return timelineData.clips;
+    const outroClip: TimelineClipItem = {
+      id: '__outro_fixed__',
+      sourceId: '__outro_source__',
+      fileName: outroFileName || 'Outro_TamDuc.mp4',
+      filePath: outroPath,
+      thumbnailPath: '',
+      stage: 'OUTRO_STAGE',
+      timelineStart: Number(voiceDuration.toFixed(2)),
+      timelineEnd: Number(totalDuration.toFixed(2)),
+      sourceStart: 0,
+      sourceDuration: Number(outroDuration.toFixed(2)),
+      aspectRatioType: '9:16',
+      mediaType: 'video',
+      isOutro: true,
+    };
+    return [...timelineData.clips, outroClip];
+  }, [timelineData.clips, isOutroActive, outroFileName, outroPath, voiceDuration, totalDuration, outroDuration]);
+
   // ── Composition props (Memoized để bảo toàn luồng âm thanh Audio/Video không bị khởi tạo lại liên tục) ──
   const compositionProps: MainVideoProps = useMemo(
     () => ({
@@ -870,7 +948,7 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
       fps,
       width: 1080,
       height: 1920,
-      clips: timelineData.clips,
+      clips: allClipsWithOutro,
       subtitles: timelineData.subtitles,
       voiceUrl: timelineData.voiceUrl,
       bgmUrl: selectedBgm ? `/media/bgm/${selectedBgm.split(/[\\/]/).pop()}` : undefined,
@@ -879,16 +957,24 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
       fontFamily: 'Be Vietnam Pro',
       activeWordColor: '#FFD700',
       inactiveWordColor: '#FFFFFF',
+      voiceDuration,
+      outroPath: isOutroActive ? outroPath : undefined,
+      outroDuration: isOutroActive ? outroDuration : 0,
+      outroEnabled: isOutroActive,
     }),
     [
       durationInFrames,
       fps,
-      timelineData.clips,
+      allClipsWithOutro,
       timelineData.subtitles,
       timelineData.voiceUrl,
       selectedBgm,
       voiceVolume,
       bgmVolume,
+      voiceDuration,
+      isOutroActive,
+      outroPath,
+      outroDuration,
     ]
   );
 
@@ -930,7 +1016,7 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
                 {timelineData.projectName}
               </h3>
               <p className="text-xs text-slate-400 mt-1">
-                Thời lượng: <span className="font-mono text-amber-300 font-bold">{timelineData.duration.toFixed(1)}s</span> • {timelineData.clips.length} clips • {timelineData.subtitles.length} dòng phụ đề
+                Thời lượng: <span className="font-mono text-amber-300 font-bold">{totalDuration.toFixed(1)}s</span> {isOutroActive && `(Voice ${voiceDuration.toFixed(1)}s + Outro ${outroDuration.toFixed(1)}s)`} • {timelineData.clips.length} clips
               </p>
             </div>
 
@@ -980,7 +1066,7 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
 
                 <div>
                   <div className="flex justify-between text-[11px] text-slate-400 mb-1">
-                    <span>Âm lượng Nhạc nền (Audio Ducking):</span>
+                    <span>Âm lượng Nhạc nền (Fade-out khi vào Outro):</span>
                     <span className="font-mono text-amber-400 font-bold">{Math.round(bgmVolume * 100)}%</span>
                   </div>
                   <input
@@ -994,6 +1080,61 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
                   />
                 </div>
               </div>
+            </div>
+
+            {/* Outro Settings Card in Sidebar */}
+            <div className="p-3.5 bg-slate-900/90 border border-purple-500/30 rounded-xl space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold text-purple-300 flex items-center gap-1.5">
+                  <Film className="w-3.5 h-3.5 text-purple-400" />
+                  Outro Cuối Video (Âm thanh gốc)
+                </span>
+                <label className="flex items-center gap-1.5 cursor-pointer select-none">
+                  <span className="text-[10px] text-slate-400 font-medium">{isOutroActive ? 'BẬT' : 'TẮT'}</span>
+                  <input
+                    type="checkbox"
+                    checked={outroEnabled}
+                    onChange={(e) => {
+                      if (!outroPath && e.target.checked) {
+                        handleChangeOutroFile();
+                      } else {
+                        setOutroEnabled(e.target.checked);
+                      }
+                    }}
+                    className="w-3.5 h-3.5 accent-purple-500 rounded cursor-pointer"
+                  />
+                </label>
+              </div>
+
+              {outroPath ? (
+                <div className="flex items-center justify-between text-[11px] pt-1">
+                  <span className="text-slate-300 truncate max-w-[170px]" title={outroPath}>
+                    📁 {outroFileName}
+                  </span>
+                  <div className="flex items-center gap-1.5">
+                    <span className="font-mono text-[10px] text-purple-300 font-bold bg-purple-950/80 px-1.5 py-0.5 rounded border border-purple-500/30">
+                      {outroDuration.toFixed(1)}s
+                    </span>
+                    <button
+                      onClick={handleChangeOutroFile}
+                      disabled={browsingOutro}
+                      className="text-[10px] px-1.5 py-0.5 bg-slate-800 hover:bg-slate-700 text-purple-300 rounded border border-slate-700 cursor-pointer"
+                      title="Đổi file video Outro khác"
+                    >
+                      Đổi
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <button
+                  onClick={handleChangeOutroFile}
+                  disabled={browsingOutro}
+                  className="w-full py-1.5 bg-purple-900/30 hover:bg-purple-900/50 text-purple-300 text-[11px] rounded-lg border border-purple-500/30 flex items-center justify-center gap-1.5 font-medium cursor-pointer"
+                >
+                  <FolderOpen className="w-3 h-3 text-purple-400" />
+                  <span>Chọn Video Outro</span>
+                </button>
+              )}
             </div>
           </div>
 
@@ -1083,6 +1224,29 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
             <span className="text-slate-500">
               Frame {currentFrame} / {durationInFrames}
             </span>
+
+            {/* Nút Bật/Tắt Outro trên Toolbar */}
+            <button
+              onClick={() => {
+                if (!outroPath) {
+                  handleChangeOutroFile();
+                } else {
+                  setOutroEnabled((prev) => !prev);
+                }
+              }}
+              className={`flex items-center gap-1 px-2 py-0.5 rounded-lg text-[10px] font-bold transition border cursor-pointer ${
+                isOutroActive
+                  ? 'bg-purple-500/20 hover:bg-purple-500/30 text-purple-300 border-purple-500/40 shadow-xs'
+                  : 'bg-slate-800 hover:bg-slate-700 text-slate-400 border-slate-700'
+              }`}
+              title={isOutroActive ? 'Đang bật Outro cuối video (Bấm để tắt)' : 'Đang tắt Outro (Bấm để bật)'}
+            >
+              <Film className="w-3 h-3 text-purple-400" />
+              <span>Outro: {isOutroActive ? 'BẬT' : 'TẮT'}</span>
+              {isOutroActive && (
+                <span className="text-[9px] font-mono text-purple-300 opacity-90">({outroDuration.toFixed(1)}s)</span>
+              )}
+            </button>
 
             {/* Quick Actions cho Clip đang chọn */}
             {selectedClipId && (() => {
@@ -1210,7 +1374,7 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
             <div className="h-[105px] flex items-center px-3 border-b border-slate-800/50">
               <div className="text-[11px] font-bold text-amber-400 flex items-center gap-1.5">
                 <Film className="w-3.5 h-3.5" />
-                <span>Video ({timelineData.clips.length})</span>
+                <span>Video ({timelineData.clips.length}{isOutroActive ? ' + Outro' : ''})</span>
               </div>
             </div>
             {/* Subtitle label */}
@@ -1291,6 +1455,52 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
                           />
                         );
                       })}
+
+                      {/* ── Khối OUTRO Cố Định Cuối Video ── */}
+                      {isOutroActive && (
+                        <div
+                          style={{
+                            width: Math.max(70, outroDuration * pxPerSec),
+                            flexShrink: 0,
+                          }}
+                          className="relative bg-gradient-to-br from-purple-950/90 via-slate-900 to-indigo-950/90 border-2 border-purple-500/80 rounded-lg flex flex-col overflow-hidden shadow-lg shadow-purple-900/30 group select-none ml-[2px]"
+                          title={`Outro Tâm Đức: ${outroFileName} (${outroDuration.toFixed(1)}s) - Giữ nguyên 100% âm thanh gốc`}
+                        >
+                          {/* Top accent */}
+                          <div className="h-[3px] w-full bg-gradient-to-r from-purple-400 via-pink-400 to-amber-400" />
+
+                          {/* Content */}
+                          <div className="p-1.5 flex-1 flex flex-col justify-between overflow-hidden">
+                            <div className="flex items-center justify-between">
+                              <span className="text-[9px] font-extrabold text-purple-300 flex items-center gap-1">
+                                <Film className="w-2.5 h-2.5 text-purple-400" />
+                                OUTRO
+                              </span>
+                              <span className="text-[8px] font-mono text-emerald-300 bg-emerald-950/80 px-1 py-0.2 rounded border border-emerald-500/30 font-bold">
+                                🔊 Gốc
+                              </span>
+                            </div>
+
+                            <p className="text-[9px] font-semibold text-slate-200 truncate mt-0.5" title={outroFileName}>
+                              {outroFileName}
+                            </p>
+
+                            <div className="flex items-center justify-between mt-0.5 text-[8px] text-purple-300 font-mono">
+                              <span className="font-bold">{outroDuration.toFixed(1)}s</span>
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleChangeOutroFile();
+                                }}
+                                className="px-1 py-0.2 bg-purple-500/20 hover:bg-purple-500/40 text-purple-200 rounded border border-purple-500/40 text-[7.5px] font-bold cursor-pointer"
+                                title="Đổi file Outro từ máy tính"
+                              >
+                                Đổi
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   </SortableContext>
 

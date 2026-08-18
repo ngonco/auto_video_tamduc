@@ -14,14 +14,16 @@
   1. File âm thanh Voice đọc tiếng Việt (phật pháp, đạo lý, tu tập, phước báu...).
   2. Thư mục Source chứa các Folder công trình bao gồm cả **Video** (.mp4, .mov, .mkv, .avi, .webm) và **Ảnh** (.jpg, .jpeg, .png, .webp, .bmp).
 - **Output**: Video 9:16 hoàn chỉnh với:
-  - Voice + Nhạc thiền BGM tự động hạ âm (Audio Ducking).
-  - Phụ đề Karaoke tiếng Việt đổi màu vàng kim từng từ theo thời gian thực (chuẩn mốc thời gian, không lỗi font).
-  - **Hiệu ứng chuyển cảnh Cross Dissolve (0.5s)** hòa tan mượt mà giữa các clip (loại bỏ cắt đột ngột).
+  - Voice + Nhạc thiền BGM tự động hạ âm (Audio Ducking) và **tự động Fade-out khi chuyển sang Outro**.
+  - Phụ đề Karaoke tiếng Việt đổi màu vàng kim từng từ theo thời gian thực (chuẩn mốc thời gian, không lỗi font), giới hạn trong phạm vi Voice đọc để không đè lên Outro.
+  - **Video Outro Cố Định Cuối Video (Giữ 100% Âm Thanh Gốc)**: Cấu hình file Outro mặc định trong Cài Đặt Hệ Thống, hiển thị trực quan ở cuối Video track trên Timeline, cho phép Bật/Tắt và đổi file linh hoạt; âm thanh Outro nguyên bản vang to rõ ràng.
+  - **Hiệu ứng chuyển cảnh Cross Dissolve (0.5s)** hòa tan mượt mà giữa các clip và giữa clip cuối với Outro.
   - **Hiệu ứng Zoom nhẹ (Ken Burns scale 1.0x -> 1.10x)** tạo chuyển động sống động cho media là ảnh tĩnh.
   - **Quy chuẩn thời lượng Clip 4.0s - 5.5s**: Mọi video nguồn dài tự động được cắt thành các đoạn ngắn 4-6s với góc quay tịnh tiến; khi xóa clip trên timeline hệ thống tự bù footage giữ nhịp điệu hoàn hảo.
   - **Timeline tương tác trực quan Remotion Player**:
     + **Phím tắt Spacebar Dừng/Phát**: Nhấn phím `Space` tại Timeline/Player để dừng/phát nhanh (tự động bỏ qua khi đang gõ text/phụ đề) kèm nút Play/Pause trên thanh công cụ.
     + **Chọn Clip & Đổi Nguồn Trực Tiếp (1-Click Replace)**: Chọn bất kỳ clip nào trên timeline để đổi video/ảnh mới từ **Windows Explorer** hoặc từ **Thư viện công trình**, bảo toàn 100% thời lượng slot và vị trí trên timeline.
+    + **Quản lý Khối Outro Cuối Video**: Khối Outro màu tím nổi bật với nhãn `🔊 Gốc`, có nút đổi file trực tiếp trên timeline và nút Bật/Tắt Outro nhanh trên thanh công cụ.
     + Nút **Fit Toàn Bộ (1-Click Zoom-to-Fit)**: Tự động đo chiều rộng màn hình và thu phóng vừa khít 100% timeline (dải zoom 0.05x -> 6.0x), xem trọn vẹn video từ 30s đến 5 phút mà không cần cuộn ngang.
     + Thước đo Ruler thông minh: Tự động giãn cách vạch thời gian (0.5s, 1s, 5s, 10s, 15s, 30s) tùy mức zoom.
     + Nút **Cắt Chuẩn 4-6s**: Tự động cân bằng và phân bổ lại toàn bộ clip về dải vàng 4.0s - 5.5s.
@@ -46,7 +48,7 @@
   ├── STT Whisper Engine     (server/services/stt-service.ts)   : Nhận diện tiếng Việt bóc word timestamps (response.words + seg.words)
   ├── Subtitle Sync Engine   (server/services/subtitle-fixer.ts): Phân đoạn phụ đề 9:16 bảo toàn 100% từ ngữ & mốc thời gian Voice, chuẩn hóa danh xưng Phật học & ngữ pháp tiếng Việt
   ├── Storyline Engine       (server/services/storyline-engine.ts): Phân bổ clip/ảnh 4 giai đoạn theo thời lượng Voice
-  └── Render Service         (server/services/render-service.ts): Render MP4 1080x1920 (Cross Dissolve + Image Zoom + ASS Karaoke)
+  └── Render Service         (server/services/render-service.ts): Render MP4 1080x1920 (Cross Dissolve + Image Zoom + ASS Karaoke + Outro)
 -------------------------------------------------------------------------------------------------------
 [ TẦNG LƯU TRỮ CỤC BỘ (Local Storage) ]
   ├── database/library.db    : SQLite Single-file (Bảng projects, video_sources, generated_videos, settings, voices)
@@ -54,7 +56,7 @@
   ├── assets/fonts/          : Thư viện font tiếng Việt chuẩn (Be Vietnam Pro, Montserrat, Lexend)
   ├── assets/bgm/            : Kho nhạc thiền Phật giáo không lời
   ├── .env                   : VILAO_STT_KEY, VILAO_SUBTITLE_KEY, VILAO_EMBEDDING_KEY, VILAO_BASE_URL, ROOT_SOURCE_DIR, EXPORT_DIR
-  └── config.json            : Cấu hình mặc định (font size, ducking volume, clip duration, stages ratio)
+  └── config.json            : Cấu hình mặc định (font size, ducking volume, clip duration, defaultOutroPath, outroEnabled)
 =======================================================================================================
 ```
 
@@ -82,7 +84,7 @@ Tất cả các dịch vụ AI kết nối qua API Gateway chuẩn OpenAI SDK (`
 Mỗi clip được cắt ngắn **4.0s - 5.5s** và phân bổ tịnh tiến theo tỷ lệ phần trăm thời gian của Voice đọc:
 
 ```
-Tổng thời lượng Video = Thời lượng Voice chính xác (T giây từ ffprobe)
+Tổng thời lượng Video = Thời lượng Voice chính xác (T giây từ ffprobe) + Thời lượng Outro (nếu bật)
 
 [GIAI ĐOẠN 1: THI CÔNG THÔ] (0% - 20% đầu video)
 - Tag: STAGE_1_RAW_CARPENTRY
@@ -109,7 +111,7 @@ Tổng thời lượng Video = Thời lượng Voice chính xác (T giây từ f
        + Hiệu ứng Karaoke: Chữ chưa đọc màu Trắng (#FFFFFF / &H00FFFFFF), khi giọng đọc tới đâu đổi sang màu Vàng Kim (#FFD700 / &H0000D7FF) tới đó kèm viền đen 3.5px và đổ bóng sắc nét.
        + Font chữ chuẩn: Sử dụng bộ font Be Vietnam Pro (tích hợp trong assets/fonts/ và nạp vào FFmpeg qua tham số fontsdir).
        + Vị trí & Kích thước: Căn lề đáy 22% (~420px từ đáy 1080x1920), cỡ chữ 50px chuẩn safe zone 9:16.
-       + Xử lý khoảng lặng: Tự động chèn thẻ {\\k<gap>} trong file ASS để khớp tuyệt đối từng nhịp ngắt nghỉ của giọng Voice.
+       + Xử lý khoảng lặng: Tự động chèn thẻ {\k<gap>} trong file ASS để khớp tuyệt đối từng nhịp ngắt nghỉ của giọng Voice.
   3. Chuẩn hóa Danh xưng Phật giáo: Tự động viết hoa các danh từ tôn kính (Phật, Đức Phật, Tam Bảo, Bồ Tát, Thế Tôn, Như Lai, Bổn Sư, Thích Ca, Quán Thế Âm, A Di Đà, Chư Phật, Gia Hộ, Cúng Dường, Phụng Sự...) và giữ chữ thường cho các liên từ nối.
   4. Storyline & Clip Duration Engine (Chuẩn 4.0s - 5.5s):
      - Mọi video nguồn dài (30s, 60s,...) khi nạp vào timeline đều được tự động bóc tách thành các phân đoạn 4.0s - 5.5s.
@@ -121,22 +123,27 @@ Tổng thời lượng Video = Thời lượng Voice chính xác (T giây từ f
   8. Hiệu ứng Chuyển cảnh (Cross Dissolve): 0.5s hòa tan mượt mà giữa các clip liền kề.
   9. Media Ảnh tĩnh: Zoom nhẹ Ken Burns từ tâm (scale 1.0x -> 1.10x).
   10. Định dạng chuẩn 9:16 (Scale Crop / Object-fit Cover): Toàn bộ media (ảnh/video) tự động phóng to cắt vừa khít toàn màn hình dọc 9:16, loại bỏ cơ chế nền mờ kép giúp giảm tải và video đồng nhất, trang nghiêm.
-  11. Tắt tuyệt đối âm thanh gốc của footage (Mute 100%): Cả Remotion Preview (volume=0, muted, pauseWhenBuffering) và FFmpeg Engine (.noAudio()) chỉ phát duy nhất Voice đọc tiếng Việt (hoặc kèm BGM do người dùng chủ động chọn).
+  11. Tắt tuyệt đối âm thanh gốc của footage công trình (Mute 100%): Cả Remotion Preview (volume=0, muted, pauseWhenBuffering) và FFmpeg Engine (.noAudio()) chỉ phát duy nhất Voice đọc tiếng Việt (hoặc kèm BGM do người dùng chủ động chọn).
   12. Tối ưu Luồng Âm Thanh Preview & Bảo toàn Buffer (Audio Stabilization):
-      - Memoized `compositionProps` qua `useMemo` và bọc `AudioLayer` qua `React.memo` để tránh việc re-render TimelineEditor tạo mới object props liên tục gây giựt / lặp âm thanh.
-      - Thêm thuộc tính `pauseWhenBuffering` và định danh `key` cố định cho từng track `<Audio>` giúp trình duyệt đồng bộ buffer âm thanh mượt mà 100%.
+       - Memoized `compositionProps` qua `useMemo` và bọc `AudioLayer` qua `React.memo` để tránh việc re-render TimelineEditor tạo mới object props liên tục gây giựt / lặp âm thanh.
+       - Thêm thuộc tính `pauseWhenBuffering` và định danh `key` cố định cho từng track `<Audio>` giúp trình duyệt đồng bộ buffer âm thanh mượt mà 100%.
   13. Hòa âm BGM & Bảo toàn âm lượng Voice:
-      - Mặc định BGM luôn tắt ('-- Không dùng nhạc nền --') để đảm bảo Voice đọc trong trẻo, không bị chèn tiếng ồn đơn âm.
-      - Thư mục assets/bgm/ để trống sẵn sàng cho người dùng tự bỏ các file nhạc thiền MP3/WAV yêu thích.
-      - Khi bật BGM: Sử dụng '-stream_loop -1' để lặp vô tận và bộ lọc FFmpeg 'amix=inputs=2:duration=first:dropout_transition=0:normalize=0' giúp bảo toàn 100% âm lượng Voice, loại bỏ tình trạng Voice bị nhỏ hoặc nghẹt tiếng.
+       - Mặc định BGM luôn tắt ('-- Không dùng nhạc nền --') để đảm bảo Voice đọc trong trẻo, không bị chèn tiếng ồn đơn âm.
+       - Thư mục assets/bgm/ để trống sẵn sàng cho người dùng tự bỏ các file nhạc thiền MP3/WAV yêu thích.
+       - Khi bật BGM: Sử dụng '-stream_loop -1' để lặp vô tận và bộ lọc FFmpeg 'amix=inputs=2:duration=first:dropout_transition=0:normalize=0' giúp bảo toàn 100% âm lượng Voice, loại bỏ tình trạng Voice bị nhỏ hoặc nghẹt tiếng.
   14. Trải Nghiệm Sau Khi Xuất Video (Post-Render Actions & Video Preview):
-      - **Xem Video Ngay (In-App Player 9:16)**: Modal trình phát video 9:16 tích hợp ngay trong giao diện với autoplay, unmuted audio và đầy đủ điều khiển.
-      - **Mở Thư Mục Video (Windows Explorer)**: Lệnh PowerShell `Start-Process explorer.exe -ArgumentList '/select,"<path>"'` tự động mở đúng thư mục và chọn/highlight trực tiếp file video vừa xuất mà không bị lỗi đường dẫn chứa khoảng trắng.
-      - **Mở Bằng Windows Player**: Phát ngay lập tức qua trình phát đa phương tiện mặc định của hệ điều hành (VLC, Windows Media Player...).
-      - **Tải Trực Tiếp (.MP4)**: Tải video trực tiếp về máy qua trình duyệt.
-      - **Khung Điều Khiển Ghi Nhớ**: Card thông tin video vừa xuất hiển thị thường trực trên thanh công cụ và bảng điều khiển Timeline Editor để xem lại hoặc mở thư mục bất kỳ lúc nào.
+       - **Xem Video Ngay (In-App Player 9:16)**: Modal trình phát video 9:16 tích hợp ngay trong giao diện với autoplay, unmuted audio và đầy đủ điều khiển.
+       - **Mở Thư Mục Video (Windows Explorer)**: Lệnh PowerShell `Start-Process explorer.exe -ArgumentList '/select,"<path>"'` tự động mở đúng thư mục và chọn/highlight trực tiếp file video vừa xuất mà không bị lỗi đường dẫn chứa khoảng trắng.
+       - **Mở Bằng Windows Player**: Phát ngay lập tức qua trình phát đa phương tiện mặc định của hệ điều hành (VLC, Windows Media Player...).
+       - **Tải Trực Tiếp (.MP4)**: Tải video trực tiếp về máy qua trình duyệt.
+       - **Khung Điều Khiển Ghi Nhớ**: Card thông tin video vừa xuất hiển thị thường trực trên thanh công cụ và bảng điều khiển Timeline Editor để xem lại hoặc mở thư mục bất kỳ lúc nào.
+  15. Cơ Chế Video Outro Cố Định & Bảo Toàn Âm Thanh Gốc (Unmuted Outro Engine):
+       - **Cấu hình & Tự động gắn kết**: File video Outro mặc định (`defaultOutroPath`) được lưu trong `config.json` qua trang Cài Đặt Hệ Thống. Khi mở Timeline Editor, khối Outro tự động gắn vào cuối Video track sau clip cuối cùng.
+       - **Bảo toàn 100% âm thanh gốc (Unmuted)**: Khác với video clip công trình bị mute để nhường chỗ cho Voice, clip Outro có cờ `isOutro: true` được thiết lập `volume={1.0}` và `muted={false}` trong Remotion Player cũng như trích xuất nguyên vẹn audio stream khi Render FFmpeg.
+       - **Audio Ducking & BGM Fade-out**: Nhạc thiền BGM tự động Fade-out (nhỏ dần rồi tắt trong 1.0s cuối của phần Voice) trước khi chuyển sang Outro, đảm bảo âm thanh thương hiệu của Outro vang lên trong trẻo và rõ ràng nhất.
+       - **Giới hạn Phụ đề Karaoke**: Phụ đề ASS Karaoke chỉ hiển thị trong dải thời gian `0 -> exactVoiceDuration`, tuyệt đối không đè chữ lên Outro.
+       - **FFmpeg Stitching Pipeline**: Chuẩn hóa Outro 1080x1920 30fps (`norm_outro.mp4`), nối video thân + outro bằng `xfade` (0.5s) và nối audio bằng `acrossfade` (0.5s) hoặc `concat` tạo video MP4 hoàn chỉnh với thời lượng `exactVoiceDuration + exactOutroDuration - xfadeDuration`.
 ```
-
 
 ---
 
@@ -226,15 +233,16 @@ CREATE TABLE voices (
 | `DELETE`| `/api/generator/voices/:id` | Xóa voice khỏi danh sách lịch sử |
 | `POST` | `/api/generator/upload-voice` | Tải lên file Voice (.mp3, .wav, .m4a) qua web |
 | `POST` | `/api/generator/process-voice` | Nhận diện STT Whisper + Gemini sửa phụ đề Phật học & tự động lưu lịch sử |
-| `POST` | `/api/generator/assemble-storyline`| Tự động phân bổ clip 4 giai đoạn khớp thời lượng Voice |
+| `POST` | `/api/generator/assemble-storyline`| Tự động phân bổ clip 4 giai đoạn khớp thời lượng Voice (kèm cấu hình Outro) |
 | `GET` | `/api/generator/bgm-list` | Lấy danh sách nhạc thiền BGM |
-| `POST` | `/api/render/start` | Bắt đầu Render video MP4 1080x1920 qua FFmpeg |
+| `POST` | `/api/render/start` | Bắt đầu Render video MP4 1080x1920 qua FFmpeg (kèm Outro unmuted audio & BGM fade-out) |
 | `GET` | `/api/render/status/:jobId` | Lấy tiến độ % render (0 - 100%) và đường dẫn file output chính xác |
 | `POST` | `/api/render/open-folder` | Mở thư mục chứa video trên Windows Explorer (và tự động highlight chọn file video vừa xuất) |
 | `POST` | `/api/render/open-video` | Mở phát video trực tiếp bằng ứng dụng xem video mặc định của Windows |
-| `GET` | `/api/settings` | Đọc cấu hình 3 API Key .env / config.json |
-| `POST` | `/api/settings` | Lưu cấu hình 3 API Key .env / config.json |
+| `GET` | `/api/settings` | Đọc cấu hình 3 API Key .env / config.json / defaultOutroPath |
+| `POST` | `/api/settings` | Lưu cấu hình 3 API Key .env / config.json / defaultOutroPath |
 | `POST` | `/api/settings/browse-folder` | Mở hộp thoại FolderBrowserDialog của Windows |
+| `POST` | `/api/settings/browse-video` | Mở hộp thoại OpenFileDialog của Windows chọn video Outro (.mp4, .mov, .mkv...) |
 | `GET` | `/media/stream?path=...` | Stream video & audio hỗ trợ HTTP Range header cho Preview Player |
 | `GET` | `/api/health` | Kiểm tra trạng thái hoạt động backend |
 
@@ -245,7 +253,7 @@ CREATE TABLE voices (
 ```
 Auto_Video_TamDuc/
 ├── .env                        # Chứa VILAO_STT_KEY, VILAO_SUBTITLE_KEY, VILAO_EMBEDDING_KEY, VILAO_BASE_URL, ROOT_SOURCE_DIR, EXPORT_DIR
-├── config.json                 # Cấu hình app (default font, ducking volume, clip duration)
+├── config.json                 # Cấu hình app (default font, ducking volume, clip duration, defaultOutroPath, outroEnabled)
 ├── package.json                # Dependencies React, Remotion, Express, SQLite, FFmpeg
 ├── vite.config.ts              # Proxy port 5173 -> backend 3001
 ├── tsconfig.json
@@ -260,11 +268,12 @@ Auto_Video_TamDuc/
 │   │   ├── library.routes.ts   # Quản lý công trình & scan
 │   │   ├── generator.routes.ts # STT, Sửa phụ đề, Sinh kịch bản
 │   │   ├── render.routes.ts    # Render MP4 1080x1920
-│   │   └── settings.routes.ts  # Quản lý API Key, Base URL, Thư mục Source & Exports
+│   │   └── settings.routes.ts  # Quản lý API Key, Base URL, Thư mục Source & Exports, Video Outro
 │   ├── utils/
 │   │   ├── picker.ps1          # Hộp thoại chọn thư mục Windows (Folder Browser)
 │   │   ├── audio-picker.ps1    # Hộp thoại chọn file Voice âm thanh (.mp3, .wav, .m4a)
-│   │   └── media-picker.ps1    # Hộp thoại chọn file Video hoặc Ảnh (.mp4, .mov, .jpg, .png...)
+│   │   ├── media-picker.ps1    # Hộp thoại chọn file Video hoặc Ảnh (.mp4, .mov, .jpg, .png...)
+│   │   └── video-picker.ps1    # Hộp thoại chọn file Video Outro (.mp4, .mov, .mkv, .avi, .webm)
 │   └── services/
 │       ├── api-client.ts       # OpenAI SDK trỏ https://api.vilao.ai/v1
 │       ├── ffmpeg.ts           # Trích frame JPEG 720p, thumbnail, metadata

@@ -35,6 +35,25 @@ export interface RenderRequest {
   clips: TimelineClipItem[];
   subtitles: SubtitleLine[];
   outputDir: string;
+  outroPath?: string;
+  outroEnabled?: boolean;
+  outroDuration?: number;
+}
+
+/**
+ * Kiểm tra xem file media có audio stream hay không
+ */
+async function checkHasAudio(filePath: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    ffmpeg.ffprobe(filePath, (err, metadata) => {
+      if (err || !metadata || !metadata.streams) {
+        resolve(false);
+      } else {
+        const hasAudio = metadata.streams.some((s) => s.codec_type === 'audio');
+        resolve(hasAudio);
+      }
+    });
+  });
 }
 
 /**
@@ -104,7 +123,8 @@ function isImageFile(filePath: string): boolean {
 
 /**
  * Render Video Hoàn Chỉnh chuẩn 9:16 (1080x1920) với FFmpeg
- * Tích hợp: Hiệu ứng chuyển cảnh Cross Dissolve giữa các video và Zoom nhẹ (Ken Burns) cho ảnh
+ * Tích hợp: Hiệu ứng chuyển cảnh Cross Dissolve giữa các video, Zoom nhẹ (Ken Burns) cho ảnh,
+ * và ghép nối Outro cố định giữ nguyên 100% âm thanh gốc ở cuối video.
  */
 export async function renderFinalVideo(
   req: RenderRequest,
@@ -134,7 +154,21 @@ export async function renderFinalVideo(
     }
   } catch (_) {}
 
-  // 3. Cắt và chuẩn hóa từng clip song song (Parallel Worker Pool)
+  // Kiểm tra Outro
+  const hasOutro = Boolean(req.outroEnabled && req.outroPath && fs.existsSync(req.outroPath));
+  let exactOutroDuration = 0;
+  if (hasOutro && req.outroPath) {
+    try {
+      const outroMeta = await getVideoMetadata(req.outroPath);
+      if (outroMeta.duration && outroMeta.duration > 0) {
+        exactOutroDuration = outroMeta.duration;
+      }
+    } catch (_) {
+      exactOutroDuration = req.outroDuration || 5.0;
+    }
+  }
+
+  // 3. Cắt và chuẩn hóa từng clip thân video song song (Parallel Worker Pool)
   const transDur = 0.5; // 0.5s chuyển cảnh hòa tan
   let completedClips = 0;
 
@@ -142,7 +176,7 @@ export async function renderFinalVideo(
     const isImage = clip.mediaType === 'image' || isImageFile(clip.filePath);
     const outClip = path.join(tempDir, `norm_clip_${clipIdx}.mp4`);
     const isLast = clipIdx === req.clips.length - 1;
-    const duration = Math.max(1.0, (clip.sourceDuration || 5.0) + (isLast ? 0 : transDur));
+    const duration = Math.max(1.0, (clip.sourceDuration || 5.0) + (isLast ? (hasOutro ? transDur : 0) : transDur));
 
     await new Promise<void>((resolve, reject) => {
       let command = ffmpeg();
@@ -186,7 +220,7 @@ export async function renderFinalVideo(
 
     completedClips++;
     if (onProgress) {
-      const pct = 5 + Math.round((completedClips / req.clips.length) * 45);
+      const pct = 5 + Math.round((completedClips / req.clips.length) * 40);
       onProgress(pct, `Đang xử lý song song chuẩn hóa clip ${completedClips}/${req.clips.length}...`);
     }
 
@@ -197,7 +231,7 @@ export async function renderFinalVideo(
   const clipDurations = normalizedClips.map((c) => c.duration);
 
   if (onProgress) {
-    onProgress(55, 'Đang hòa trộn chuyển cảnh Cross Dissolve giữa các clip...');
+    onProgress(50, 'Đang hòa trộn chuyển cảnh Cross Dissolve giữa các clip...');
   }
 
   const stitchedVideoPath = path.join(tempDir, 'stitched.mp4');
@@ -223,7 +257,7 @@ export async function renderFinalVideo(
       currentAccumulated = currentAccumulated + clipDurations[i] - actualTrans;
     }
 
-    // Thêm tpad để đảm bảo khung hình cuối cùng giữ nguyên, không bao giờ bị cắt đen trước khi tiếng dứt
+    // Thêm tpad để đảm bảo khung hình cuối cùng giữ nguyên
     filterChains.push(`[v_xfade_end]tpad=stop_mode=clone:stop_duration=5,format=yuv420p[outv]`);
 
     await new Promise<void>((resolve, reject) => {
@@ -238,12 +272,14 @@ export async function renderFinalVideo(
   }
 
   if (onProgress) {
-    onProgress(75, 'Đang hòa âm Voice, Nhạc Thiền BGM và ép phụ đề Karaoke 9:16...');
+    onProgress(65, 'Đang hòa âm Voice, Nhạc Thiền BGM và ép phụ đề Karaoke 9:16...');
   }
 
   const fontsDir = path.resolve(process.cwd(), 'assets', 'fonts').split(path.sep).join('/').replace(/:/g, '\\:');
   const normalizedAssPath = assPath.split(path.sep).join('/').replace(/:/g, '\\:');
+  const mainVideoPath = hasOutro ? path.join(tempDir, 'main_with_subs.mp4') : finalOutputPath;
 
+  // Render phần thân video (Video + Subtitles + Voice + Fading BGM)
   await new Promise<void>((resolve, reject) => {
     let command = ffmpeg().input(stitchedVideoPath).input(req.voicePath);
 
@@ -258,7 +294,9 @@ export async function renderFinalVideo(
     let complexFilter = `[0:v]subtitles=filename='${normalizedAssPath}':fontsdir='${fontsDir}',format=yuv420p[outv];`;
 
     if (hasBgm) {
-      complexFilter += `[1:a]volume=${voiceVol}[voice];[2:a]volume=${bgmVol}[bgm];[voice][bgm]amix=inputs=2:duration=first:dropout_transition=0:normalize=0[outa]`;
+      // BGM Fade-out ở 1.0s cuối của phần Voice
+      const fadeStart = Math.max(0, exactVoiceDuration - 1.0);
+      complexFilter += `[1:a]volume=${voiceVol}[voice];[2:a]volume=${bgmVol},afade=t=out:st=${fadeStart.toFixed(2)}:d=1.0[bgm];[voice][bgm]amix=inputs=2:duration=first:dropout_transition=0:normalize=0[outa]`;
     } else {
       complexFilter += `[1:a]volume=${voiceVol}[outa]`;
     }
@@ -280,17 +318,115 @@ export async function renderFinalVideo(
         '-ar 44100',
         `-t ${exactVoiceDuration.toFixed(2)}`,
       ])
-      .output(finalOutputPath)
+      .output(mainVideoPath)
       .on('progress', (progress) => {
         if (onProgress && progress.percent) {
-          const currentPct = 75 + Math.round((progress.percent / 100) * 24);
-          onProgress(Math.min(99, currentPct), `Đang xuất video MP4: ${Math.round(progress.percent)}%`);
+          const currentPct = 65 + Math.round((progress.percent / 100) * (hasOutro ? 20 : 34));
+          onProgress(Math.min(99, currentPct), `Đang xuất video phần thân: ${Math.round(progress.percent)}%`);
         }
       })
       .on('end', () => resolve())
       .on('error', (err) => reject(err))
       .run();
   });
+
+  // 4. Nếu có Outro: Chuẩn hóa Outro và ghép nối vào cuối video với âm thanh gốc 100%
+  if (hasOutro && req.outroPath) {
+    if (onProgress) {
+      onProgress(88, 'Đang chuẩn hóa Video Outro và giữ nguyên 100% âm thanh gốc...');
+    }
+
+    const normOutroPath = path.join(tempDir, 'norm_outro.mp4');
+    const outroHasAudio = await checkHasAudio(req.outroPath);
+
+    await new Promise<void>((resolve, reject) => {
+      let cmd = ffmpeg().input(req.outroPath!);
+
+      if (outroHasAudio) {
+        cmd
+          .complexFilter([
+            `[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1,fps=30,format=yuv420p[outv]`,
+            `[0:a]volume=1.0,aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo[outa]`,
+          ])
+          .outputOptions([
+            '-map [outv]',
+            '-map [outa]',
+            '-c:v libx264',
+            '-preset ultrafast',
+            '-threads 0',
+            '-crf 20',
+            '-c:a aac',
+            '-b:a 192k',
+            '-ar 44100',
+            `-t ${exactOutroDuration.toFixed(2)}`,
+          ]);
+      } else {
+        cmd
+          .input('anullsrc=channel_layout=stereo:sample_rate=44100')
+          .inputOptions(['-f lavfi'])
+          .complexFilter([
+            `[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1,fps=30,format=yuv420p[outv]`,
+            `[1:a]atrim=duration=${exactOutroDuration.toFixed(2)},aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo[outa]`,
+          ])
+          .outputOptions([
+            '-map [outv]',
+            '-map [outa]',
+            '-c:v libx264',
+            '-preset ultrafast',
+            '-threads 0',
+            '-crf 20',
+            '-c:a aac',
+            '-b:a 192k',
+            '-ar 44100',
+            `-t ${exactOutroDuration.toFixed(2)}`,
+          ]);
+      }
+
+      cmd
+        .output(normOutroPath)
+        .on('end', () => resolve())
+        .on('error', (err) => reject(err))
+        .run();
+    });
+
+    if (onProgress) {
+      onProgress(94, 'Đang nối Video Outro âm thanh nguyên bản vào cuối video...');
+    }
+
+    // Nối Video thân + Outro qua xfade & acrossfade
+    const xfadeDur = Math.min(0.5, exactVoiceDuration * 0.1, exactOutroDuration * 0.1);
+    const xfadeOffset = Math.max(0.1, exactVoiceDuration - xfadeDur);
+    const totalOutDuration = exactVoiceDuration + exactOutroDuration - xfadeDur;
+
+    await new Promise<void>((resolve, reject) => {
+      ffmpeg()
+        .input(mainVideoPath)
+        .input(normOutroPath)
+        .complexFilter([
+          `[0:v][1:v]xfade=transition=fade:duration=${xfadeDur.toFixed(2)}:offset=${xfadeOffset.toFixed(2)},format=yuv420p[outv]`,
+          `[0:a][1:a]acrossfade=d=${xfadeDur.toFixed(2)}[outa]`,
+        ])
+        .outputOptions([
+          '-map [outv]',
+          '-map [outa]',
+          '-c:v libx264',
+          '-preset faster',
+          '-threads 0',
+          '-crf 18',
+          '-profile:v high',
+          '-level 4.1',
+          '-pix_fmt yuv420p',
+          '-c:a aac',
+          '-b:a 192k',
+          '-ar 44100',
+          `-t ${totalOutDuration.toFixed(2)}`,
+        ])
+        .output(finalOutputPath)
+        .on('end', () => resolve())
+        .on('error', (err) => reject(err))
+        .run();
+    });
+  }
 
   try {
     fs.rmSync(tempDir, { recursive: true, force: true });

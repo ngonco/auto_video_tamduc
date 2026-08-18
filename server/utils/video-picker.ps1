@@ -1,5 +1,5 @@
 param(
-    [string]$Title = "Chon File Video Hoac Anh (MP4, MOV, MKV, JPG, PNG...)",
+    [string]$Title = "Chon File Video Outro (.mp4, .mov, .mkv, .avi, .webm)",
     [string]$InitialDir = ""
 )
 
@@ -13,7 +13,7 @@ $dlg.Title = $Title
 $dlg.ValidateNames = $true
 $dlg.CheckFileExists = $true
 $dlg.CheckPathExists = $true
-$dlg.Filter = "Media Files (*.mp4;*.mov;*.mkv;*.avi;*.webm;*.jpg;*.jpeg;*.png;*.webp;*.bmp)|*.mp4;*.mov;*.mkv;*.avi;*.webm;*.jpg;*.jpeg;*.png;*.webp;*.bmp|Video Files (*.mp4;*.mov;*.mkv;*.avi;*.webm)|*.mp4;*.mov;*.mkv;*.avi;*.webm|Image Files (*.jpg;*.jpeg;*.png;*.webp;*.bmp)|*.jpg;*.jpeg;*.png;*.webp;*.bmp|All Files (*.*)|*.*"
+$dlg.Filter = "Video Files (*.mp4;*.mov;*.mkv;*.avi;*.webm)|*.mp4;*.mov;*.mkv;*.avi;*.webm|All Files (*.*)|*.*"
 
 if ($InitialDir -and (Test-Path $InitialDir)) {
     if (Test-Path $InitialDir -PathType Container) {

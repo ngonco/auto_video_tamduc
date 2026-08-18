@@ -15,6 +15,12 @@ interface ActiveTimelineState {
   subtitles: SubtitleLine[];
   clips: TimelineClipItem[];
   availableSources?: SourceClipRecord[];
+  outro?: {
+    filePath: string;
+    fileName: string;
+    duration: number;
+    enabled: boolean;
+  } | null;
 }
 
 export const App: React.FC = () => {

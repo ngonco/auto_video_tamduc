@@ -11,6 +11,7 @@ import {
   FileEdit,
   Eye,
   Server,
+  Film,
 } from 'lucide-react';
 
 export const SettingsForm: React.FC = () => {
@@ -23,10 +24,15 @@ export const SettingsForm: React.FC = () => {
   const [visionModel, setVisionModel] = useState('ts/gemini-3.1-flash-lite');
   const [rootSourceDir, setRootSourceDir] = useState('');
   const [exportDir, setExportDir] = useState('');
+  const [defaultOutroPath, setDefaultOutroPath] = useState('');
+  const [outroEnabled, setOutroEnabled] = useState(true);
+  const [outroDuration, setOutroDuration] = useState(0);
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [browsingDir, setBrowsingDir] = useState<'root' | 'export' | null>(null);
+  const [browsingOutro, setBrowsingOutro] = useState(false);
+  const [rawConfig, setRawConfig] = useState<any>({});
   const [toastMsg, setToastMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
   useEffect(() => {
@@ -43,6 +49,10 @@ export const SettingsForm: React.FC = () => {
           setVisionModel(data.data.visionModel || 'ts/gemini-3.1-flash-lite');
           setRootSourceDir(data.data.rootSourceDir || '');
           setExportDir(data.data.exportDir || '');
+          setDefaultOutroPath(data.data.defaultOutroPath || '');
+          setOutroEnabled(data.data.outroEnabled ?? true);
+          setOutroDuration(data.data.outroDuration || 0);
+          setRawConfig(data.data.config || {});
         }
       })
       .finally(() => setLoading(false));
@@ -72,12 +82,38 @@ export const SettingsForm: React.FC = () => {
     }
   };
 
+  const handleBrowseOutro = async () => {
+    setBrowsingOutro(true);
+    try {
+      const res = await fetch('/api/settings/browse-video', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ initialPath: defaultOutroPath }),
+      });
+      const data = await res.json();
+      if (data.success && data.selectedPath) {
+        setDefaultOutroPath(data.selectedPath);
+        setOutroDuration(data.duration || 0);
+      }
+    } catch (err: any) {
+      setToastMsg({ type: 'error', text: 'Lỗi chọn file Outro: ' + err.message });
+    } finally {
+      setBrowsingOutro(false);
+    }
+  };
+
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
     setSaving(true);
     setToastMsg(null);
 
     try {
+      const updatedConfig = {
+        ...rawConfig,
+        defaultOutroPath,
+        outroEnabled,
+      };
+
       const res = await fetch('/api/settings', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -88,11 +124,13 @@ export const SettingsForm: React.FC = () => {
           baseUrl,
           rootSourceDir,
           exportDir,
+          config: updatedConfig,
         }),
       });
 
       const data = await res.json();
       if (data.success) {
+        setRawConfig(updatedConfig);
         setToastMsg({ type: 'success', text: 'Đã lưu cấu hình hệ thống thành công!' });
       } else {
         setToastMsg({ type: 'error', text: data.error || 'Lỗi lưu cấu hình' });
@@ -290,7 +328,7 @@ export const SettingsForm: React.FC = () => {
                 type="button"
                 onClick={() => handleBrowse('export')}
                 disabled={browsingDir === 'export'}
-                className="px-4 py-3 bg-slate-800 hover:bg-slate-700 border border-slate-600 text-amber-300 hover:text-amber-200 text-xs font-semibold rounded-xl transition flex items-center gap-2 whitespace-nowrap active:scale-95"
+                className="px-4 py-3 bg-slate-800 hover:bg-slate-700 border border-slate-600 text-amber-300 hover:text-amber-200 text-xs font-semibold rounded-xl transition flex items-center gap-2 whitespace-nowrap active:scale-95 cursor-pointer"
                 title="Mở cửa sổ chọn thư mục trên máy"
               >
                 {browsingDir === 'export' ? (
@@ -304,11 +342,85 @@ export const SettingsForm: React.FC = () => {
           </div>
         </div>
 
+        {/* Outro Settings Box */}
+        <div className="bg-[#151D2E] border border-slate-800 rounded-2xl p-6 shadow-xl space-y-4">
+          <div className="flex items-center justify-between">
+            <h3 className="text-sm font-bold text-amber-300 font-montserrat flex items-center gap-2">
+              <Film className="w-4 h-4 text-purple-400" />
+              Cấu Hình Video Outro Cố Định (Cuối Video)
+            </h3>
+            <label className="flex items-center gap-2 cursor-pointer select-none bg-slate-900 px-3 py-1 rounded-xl border border-slate-700">
+              <span className="text-xs text-slate-300 font-medium">Bật Outro mặc định:</span>
+              <input
+                type="checkbox"
+                checked={outroEnabled}
+                onChange={(e) => setOutroEnabled(e.target.checked)}
+                className="w-4 h-4 accent-amber-500 rounded cursor-pointer"
+              />
+            </label>
+          </div>
+
+          <p className="text-[11px] text-slate-400 leading-relaxed">
+            Video Outro chứa logo, thông tin liên hệ và lời tri ân của Tâm Đức. Video này sẽ nằm ở cuối mỗi video, 
+            <strong className="text-amber-300"> giữ nguyên 100% âm thanh gốc</strong> và nhạc nền BGM sẽ tự động Fade-out khi chuyển sang Outro.
+          </p>
+
+          <div>
+            <label className="text-xs text-slate-400 block mb-1.5 font-medium">
+              File Video Outro (.mp4, .mov, .mkv...):
+            </label>
+            <div className="flex gap-2">
+              <input
+                type="text"
+                placeholder="Chọn file video outro (ví dụ: D:/Outro_TamDuc_9x16.mp4)..."
+                value={defaultOutroPath}
+                onChange={(e) => setDefaultOutroPath(e.target.value)}
+                className="flex-1 bg-slate-900 border border-slate-700 text-slate-100 text-xs rounded-xl p-3 outline-none focus:border-amber-500 font-mono"
+              />
+              <button
+                type="button"
+                onClick={handleBrowseOutro}
+                disabled={browsingOutro}
+                className="px-4 py-3 bg-purple-900/40 hover:bg-purple-900/60 border border-purple-500/40 text-purple-300 hover:text-purple-200 text-xs font-semibold rounded-xl transition flex items-center gap-2 whitespace-nowrap active:scale-95 cursor-pointer"
+                title="Mở cửa sổ chọn file video Outro trên máy"
+              >
+                {browsingOutro ? (
+                  <RefreshCw className="w-4 h-4 animate-spin text-purple-400" />
+                ) : (
+                  <FolderOpen className="w-4 h-4 text-purple-400" />
+                )}
+                <span>Chọn File Outro</span>
+              </button>
+            </div>
+
+            {defaultOutroPath && (
+              <div className="mt-2.5 flex items-center gap-3 p-2.5 rounded-xl bg-purple-950/30 border border-purple-500/20 text-xs">
+                <span className="text-purple-300 font-medium truncate max-w-sm">📁 {defaultOutroPath.split(/[\\/]/).pop()}</span>
+                {outroDuration > 0 && (
+                  <span className="px-2 py-0.5 rounded bg-purple-500/20 text-purple-300 font-mono font-bold text-[10px] border border-purple-500/30 whitespace-nowrap">
+                    {outroDuration.toFixed(1)}s (Âm thanh gốc 🔊)
+                  </span>
+                )}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setDefaultOutroPath('');
+                    setOutroDuration(0);
+                  }}
+                  className="text-slate-500 hover:text-red-400 ml-auto text-xs cursor-pointer"
+                >
+                  Xóa
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+
         {/* Submit */}
         <button
           type="submit"
           disabled={saving}
-          className="w-full py-3.5 bg-gradient-to-r from-amber-500 to-yellow-500 hover:from-amber-600 hover:to-yellow-600 text-slate-950 font-extrabold text-xs rounded-xl shadow-lg transition flex items-center justify-center gap-2 active:scale-[0.99]"
+          className="w-full py-3.5 bg-gradient-to-r from-amber-500 to-yellow-500 hover:from-amber-600 hover:to-yellow-600 text-slate-950 font-extrabold text-xs rounded-xl shadow-lg transition flex items-center justify-center gap-2 active:scale-[0.99] cursor-pointer"
         >
           {saving ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
           LƯU CẤU HÌNH HỆ THỐNG

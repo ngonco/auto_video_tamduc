@@ -15,10 +15,11 @@ export const MainVideo: React.FC<MainVideoProps> = ({
   fontFamily = 'Be Vietnam Pro',
   activeWordColor = '#FFD700',
   inactiveWordColor = '#FFFFFF',
+  voiceDuration,
 }) => {
   return (
     <AbsoluteFill style={{ backgroundColor: '#0B0F19' }}>
-      {/* 1. Tầng Video Clips */}
+      {/* 1. Tầng Video Clips & Outro */}
       <VideoLayer clips={clips} />
 
       {/* 2. Tầng Phụ đề Karaoke */}
@@ -29,12 +30,13 @@ export const MainVideo: React.FC<MainVideoProps> = ({
         inactiveColor={inactiveWordColor}
       />
 
-      {/* 3. Tầng Âm thanh */}
+      {/* 3. Tầng Âm thanh (Voice + BGM fade-out trước Outro) */}
       <AudioLayer
         voiceUrl={voiceUrl}
         bgmUrl={bgmUrl}
         voiceVolume={voiceVolume}
         bgmVolume={bgmVolume}
+        voiceDuration={voiceDuration}
       />
     </AbsoluteFill>
   );

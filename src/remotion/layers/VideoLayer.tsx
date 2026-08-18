@@ -85,8 +85,8 @@ const SingleClipView: React.FC<SingleClipViewProps> = ({
           <Video
             src={mediaSrc}
             startFrom={startFromFrame}
-            volume={0}
-            muted
+            volume={clip.isOutro ? 1.0 : 0}
+            muted={!clip.isOutro}
             pauseWhenBuffering
             style={{
               width: '100%',

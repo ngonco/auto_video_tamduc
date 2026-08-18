@@ -2,14 +2,15 @@ import { Router } from 'express';
 import fs from 'fs';
 import path from 'path';
 import { execFile } from 'child_process';
+import { getVideoMetadata } from '../services/ffmpeg.js';
 
 export const settingsRouter = Router();
 
 // Đọc cấu hình hiện tại
-settingsRouter.get('/', (req, res) => {
+settingsRouter.get('/', async (req, res) => {
   try {
     const configPath = path.resolve(process.cwd(), 'config.json');
-    let configData = {};
+    let configData: any = {};
     if (fs.existsSync(configPath)) {
       configData = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
     }
@@ -19,6 +20,19 @@ settingsRouter.get('/', (req, res) => {
       if (key.length <= 8) return '••••••••';
       return '••••••••' + key.slice(-4);
     };
+
+    const defaultOutroPath = configData.defaultOutroPath || configData.defaults?.defaultOutroPath || '';
+    const outroEnabled = configData.outroEnabled !== undefined 
+      ? configData.outroEnabled 
+      : (configData.defaults?.outroEnabled ?? true);
+    let outroDuration = configData.outroDuration || configData.defaults?.outroDuration || 0;
+
+    if (defaultOutroPath && fs.existsSync(defaultOutroPath)) {
+      try {
+        const meta = await getVideoMetadata(defaultOutroPath);
+        outroDuration = meta.duration || 0;
+      } catch (_) {}
+    }
 
     res.json({
       success: true,
@@ -32,6 +46,9 @@ settingsRouter.get('/', (req, res) => {
         visionModel: process.env.VISION_MODEL || 'ts/gemini-3.1-flash-lite',
         rootSourceDir: process.env.ROOT_SOURCE_DIR || '',
         exportDir: process.env.EXPORT_DIR || '',
+        defaultOutroPath,
+        outroEnabled,
+        outroDuration,
         config: configData,
       },
     });
@@ -46,11 +63,10 @@ settingsRouter.post('/browse-folder', (req, res) => {
     const { initialPath } = req.body || {};
     const scriptPath = path.resolve(process.cwd(), 'server', 'utils', 'picker.ps1');
     const title = 'Chon Thu Muc (Click vao Thu Muc da Pin hoac Duyet roi nhan Open)';
-    const safeInitial = initialPath && fs.existsSync(initialPath) ? initialPath : '';
 
     execFile(
       'powershell.exe',
-      ['-NoProfile', '-STA', '-ExecutionPolicy', 'Bypass', '-File', scriptPath, title, safeInitial],
+      ['-NoProfile', '-STA', '-ExecutionPolicy', 'Bypass', '-File', scriptPath, title, initialPath || ''],
       { windowsHide: false },
       (error: any, stdout: any, stderr: any) => {
         if (error) {
@@ -61,6 +77,47 @@ settingsRouter.post('/browse-folder', (req, res) => {
         res.json({
           success: true,
           selectedPath: selectedPath || null,
+        });
+      }
+    );
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Mở Native Video File Picker của Windows để chọn Outro Video
+settingsRouter.post('/browse-video', (req, res) => {
+  try {
+    const { initialPath } = req.body || {};
+    const scriptPath = path.resolve(process.cwd(), 'server', 'utils', 'video-picker.ps1');
+    const title = 'Chon File Video Outro Co Dinh (.mp4, .mov, .mkv, .avi, .webm)';
+
+    execFile(
+      'powershell.exe',
+      ['-NoProfile', '-STA', '-ExecutionPolicy', 'Bypass', '-File', scriptPath, title, initialPath || ''],
+      { windowsHide: false },
+      async (error: any, stdout: any, stderr: any) => {
+        if (error) {
+          console.error('[BrowseVideo] Error opening dialog:', error, stderr);
+          return res.status(500).json({ success: false, error: 'Không thể mở hộp thoại: ' + error.message });
+        }
+
+        const selectedPath = (stdout || '').trim();
+        if (!selectedPath || !fs.existsSync(selectedPath)) {
+          return res.json({ success: true, selectedPath: null });
+        }
+
+        let duration = 0;
+        try {
+          const meta = await getVideoMetadata(selectedPath);
+          duration = meta.duration || 0;
+        } catch (_) {}
+
+        res.json({
+          success: true,
+          selectedPath,
+          fileName: path.basename(selectedPath),
+          duration,
         });
       }
     );

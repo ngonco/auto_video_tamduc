@@ -11,6 +11,9 @@
     "bgmVolume": 0.18,
     "voiceVolume": 1.0,
     "audioDuckingVolume": 0.08,
+    "defaultOutroPath": "E:\\Thanh Vi\\PAGE Không gian thờ\\brand\\outro 5.mp4",
+    "outroEnabled": true,
+    "outroDuration": 2.6,
     "karaoke": {
       "fontFamily": "Be Vietnam Pro",
       "fontSize": 52,

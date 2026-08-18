@@ -47,6 +47,12 @@ interface GeneratorWizardProps {
     subtitles: SubtitleLine[];
     clips: any[];
     availableSources?: any[];
+    outro?: {
+      filePath: string;
+      fileName: string;
+      duration: number;
+      enabled: boolean;
+    } | null;
   }) => void;
 }
 
@@ -268,6 +274,7 @@ export const GeneratorWizard: React.FC<GeneratorWizardProps> = ({
           subtitles,
           clips: data.data.clips,
           availableSources: data.data.availableSources || [],
+          outro: data.data.outro || null,
         });
       } else {
         setErrorMsg(data.error || 'Lỗi lắp ráp kịch bản video');

@@ -278,7 +278,7 @@ generatorRouter.post('/process-voice', async (req, res) => {
 });
 
 // 6. Tự động sinh Storyline Clips theo 4 giai đoạn
-generatorRouter.post('/assemble-storyline', (req, res) => {
+generatorRouter.post('/assemble-storyline', async (req, res) => {
   try {
     const { projectId, targetDuration } = req.body;
     if (!projectId || !targetDuration) {
@@ -300,11 +300,33 @@ generatorRouter.post('/assemble-storyline', (req, res) => {
     }
 
     const storyline = generateStoryline(clips, Number(targetDuration));
+
+    // Đọc Outro mặc định từ config.json
+    const configPath = path.resolve(process.cwd(), 'config.json');
+    let configData: any = {};
+    if (fs.existsSync(configPath)) {
+      configData = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+    }
+
+    let outroInfo = null;
+    if (configData.defaultOutroPath && fs.existsSync(configData.defaultOutroPath)) {
+      try {
+        const meta = await getVideoMetadata(configData.defaultOutroPath);
+        outroInfo = {
+          filePath: configData.defaultOutroPath,
+          fileName: path.basename(configData.defaultOutroPath),
+          duration: meta.duration || 5.0,
+          enabled: configData.outroEnabled ?? true,
+        };
+      } catch (_) {}
+    }
+
     res.json({
       success: true,
       data: {
         ...storyline,
         availableSources: clips,
+        outro: outroInfo,
       },
     });
   } catch (err: any) {

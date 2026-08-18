@@ -14,7 +14,20 @@ const activeJobs: Record<string, { status: string; percent: number; message: str
 // Bắt đầu Render
 renderRouter.post('/start', async (req, res) => {
   try {
-    const { videoId, projectName, voicePath, bgmPath, bgmVolume, voiceVolume, duckingVolume, clips, subtitles } = req.body;
+    const {
+      videoId,
+      projectName,
+      voicePath,
+      bgmPath,
+      bgmVolume,
+      voiceVolume,
+      duckingVolume,
+      clips,
+      subtitles,
+      outroPath,
+      outroEnabled,
+      outroDuration,
+    } = req.body;
 
     const exportDir = process.env.EXPORT_DIR || path.resolve(process.cwd(), 'exports');
     const jobId = `render_${uuidv4().slice(0, 8)}`;
@@ -40,6 +53,9 @@ renderRouter.post('/start', async (req, res) => {
       clips,
       subtitles,
       outputDir: exportDir,
+      outroPath,
+      outroEnabled: Boolean(outroEnabled),
+      outroDuration: Number(outroDuration) || 0,
     };
 
     renderFinalVideo(renderReq, (percent, message) => {
