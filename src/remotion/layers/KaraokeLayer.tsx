@@ -74,7 +74,8 @@ export const KaraokeLayer: React.FC<KaraokeLayerProps> = ({
             shadow = `0 0 20px rgba(255, 215, 0, 0.9), 0 3px 12px rgba(0, 0, 0, 0.95)`;
             stroke = '3.5px #000000';
           } else if (isPassed) {
-            color = '#FFF8DC'; // Màu kem sáng
+            color = activeColor; // Vàng kim (đã hoàn thành karaoke)
+            stroke = '3.5px #000000';
           }
 
           return (

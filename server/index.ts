@@ -88,6 +88,7 @@ app.get('/media/stream', (req, res) => {
       'Accept-Ranges': 'bytes',
       'Content-Length': chunksize,
       'Content-Type': contentType,
+      'Cache-Control': 'public, max-age=86400',
     };
     res.writeHead(206, head);
     file.pipe(res);
@@ -95,6 +96,8 @@ app.get('/media/stream', (req, res) => {
     const head = {
       'Content-Length': fileSize,
       'Content-Type': contentType,
+      'Accept-Ranges': 'bytes',
+      'Cache-Control': 'public, max-age=86400',
     };
     res.writeHead(200, head);
     fs.createReadStream(filePath).pipe(res);

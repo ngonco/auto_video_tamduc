@@ -8,7 +8,7 @@ import { db } from '../db.js';
 import { transcribeAudio } from '../services/stt-service.js';
 import { polishAndSegmentSubtitles, segmentAndPolishSubtitles } from '../services/subtitle-fixer.js';
 import { generateStoryline, SourceClipRecord } from '../services/storyline-engine.js';
-import { getVideoMetadata } from '../services/ffmpeg.js';
+import { getVideoMetadata, extractKeyframes } from '../services/ffmpeg.js';
 
 const UPLOAD_DIR = path.resolve(process.cwd(), '.cache', 'uploads');
 if (!fs.existsSync(UPLOAD_DIR)) {
@@ -80,6 +80,67 @@ generatorRouter.post('/pick-voice', (req, res) => {
             size: stat.size,
           },
         });
+      }
+    );
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// 2b. Mở File Explorer để chọn trực tiếp 1 file Video hoặc Ảnh trên máy tính
+generatorRouter.post('/pick-media', async (req, res) => {
+  try {
+    const scriptPath = path.resolve(process.cwd(), 'server', 'utils', 'media-picker.ps1');
+    const title = 'Chon File Video Hoac Anh (MP4, MOV, MKV, JPG, PNG...)';
+    const { initialDir } = req.body || {};
+
+    execFile(
+      'powershell.exe',
+      ['-NoProfile', '-STA', '-ExecutionPolicy', 'Bypass', '-File', scriptPath, title, initialDir || ''],
+      { windowsHide: false },
+      async (error: any, stdout: any, stderr: any) => {
+        if (error) {
+          console.error('[PickMedia] Error opening dialog:', error, stderr);
+          return res.status(500).json({ success: false, error: 'Không thể mở hộp thoại chọn file: ' + error.message });
+        }
+
+        const selectedPath = (stdout || '').trim();
+        if (!selectedPath || !fs.existsSync(selectedPath)) {
+          return res.json({ success: false, cancelled: true, message: 'Người dùng đã hủy chọn file' });
+        }
+
+        const fileName = path.basename(selectedPath);
+        const uniqueId = `pick_${Date.now()}_${uuidv4().slice(0, 6)}`;
+
+        try {
+          const meta = await getVideoMetadata(selectedPath);
+          let thumbnailPath = '';
+          try {
+            const keyframeResult = await extractKeyframes(selectedPath, uniqueId, meta.duration);
+            thumbnailPath = keyframeResult.thumbnailPath;
+          } catch (thumbErr) {
+            console.warn('[PickMedia] Warning creating thumbnail:', thumbErr);
+          }
+
+          res.json({
+            success: true,
+            file: {
+              id: uniqueId,
+              fileName,
+              filePath: selectedPath,
+              duration: meta.duration,
+              width: meta.width,
+              height: meta.height,
+              fps: meta.fps,
+              aspectRatioType: meta.aspectRatioType,
+              mediaType: meta.mediaType,
+              thumbnailPath: thumbnailPath || '',
+            },
+          });
+        } catch (metaErr: any) {
+          console.error('[PickMedia] Error probing metadata:', metaErr);
+          res.status(500).json({ success: false, error: 'Không thể đọc thông tin file media: ' + metaErr.message });
+        }
       }
     );
   } catch (err: any) {
@@ -239,7 +300,13 @@ generatorRouter.post('/assemble-storyline', (req, res) => {
     }
 
     const storyline = generateStoryline(clips, Number(targetDuration));
-    res.json({ success: true, data: storyline });
+    res.json({
+      success: true,
+      data: {
+        ...storyline,
+        availableSources: clips,
+      },
+    });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.message });
   }

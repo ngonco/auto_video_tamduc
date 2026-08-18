@@ -91,15 +91,55 @@ libraryRouter.post('/import-path', async (req, res) => {
   }
 });
 
+// Theo dõi tiến độ scan/embed cho từng công trình
+const activeScanJobs: Record<string, { status: string; percent: number; message: string; error?: string }> = {};
+
 // Trigger quét và nhúng AI lại cho 1 công trình
 libraryRouter.post('/projects/:id/scan', async (req, res) => {
   try {
     const projectId = req.params.id;
-    folderWatcher.scanAndEmbedProject(projectId);
+    activeScanJobs[projectId] = {
+      status: 'scanning',
+      percent: 0,
+      message: 'Bắt đầu tiến trình phân tích AI...',
+    };
+
     res.json({ success: true, message: 'Đã bắt đầu tiến trình phân tích AI cho công trình' });
+
+    // Chạy phân tích nền
+    folderWatcher.scanAndEmbedProject(projectId, (percent, message) => {
+      activeScanJobs[projectId] = {
+        status: percent >= 100 ? 'completed' : 'scanning',
+        percent,
+        message,
+      };
+    })
+      .then(() => {
+        activeScanJobs[projectId] = {
+          status: 'completed',
+          percent: 100,
+          message: 'Đã hoàn tất phân tích AI cho toàn bộ công trình!',
+        };
+      })
+      .catch((err) => {
+        console.error(`[LibraryRoutes] Error scanning project ${projectId}:`, err);
+        activeScanJobs[projectId] = {
+          status: 'error',
+          percent: 0,
+          message: `Lỗi phân tích AI: ${err.message}`,
+          error: err.message,
+        };
+      });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.message });
   }
+});
+
+// Lấy trạng thái tiến độ quét AI
+libraryRouter.get('/projects/:id/scan-status', (req, res) => {
+  const projectId = req.params.id;
+  const job = activeScanJobs[projectId] || { status: 'idle', percent: 0, message: '' };
+  res.json({ success: true, data: job });
 });
 
 // Xóa 1 công trình khỏi thư viện

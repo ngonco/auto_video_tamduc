@@ -4,7 +4,7 @@ import { LibraryGrid } from './components/LibraryView/LibraryGrid.js';
 import { GeneratorWizard } from './components/GeneratorView/GeneratorWizard.js';
 import { TimelineEditor } from './components/EditorView/TimelineEditor.js';
 import { SettingsForm } from './components/SettingsView/SettingsForm.js';
-import { SubtitleLine, TimelineClipItem } from './remotion/types.js';
+import { SubtitleLine, TimelineClipItem, SourceClipRecord } from './remotion/types.js';
 
 interface ActiveTimelineState {
   projectId: string;
@@ -14,6 +14,7 @@ interface ActiveTimelineState {
   duration: number;
   subtitles: SubtitleLine[];
   clips: TimelineClipItem[];
+  availableSources?: SourceClipRecord[];
 }
 
 export const App: React.FC = () => {

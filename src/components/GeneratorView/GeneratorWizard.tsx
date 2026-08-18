@@ -46,6 +46,7 @@ interface GeneratorWizardProps {
     duration: number;
     subtitles: SubtitleLine[];
     clips: any[];
+    availableSources?: any[];
   }) => void;
 }
 
@@ -266,6 +267,7 @@ export const GeneratorWizard: React.FC<GeneratorWizardProps> = ({
           duration: voiceDuration,
           subtitles,
           clips: data.data.clips,
+          availableSources: data.data.availableSources || [],
         });
       } else {
         setErrorMsg(data.error || 'Lỗi lắp ráp kịch bản video');

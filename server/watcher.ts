@@ -15,6 +15,25 @@ export function isImageFile(filePath: string): boolean {
   return IMAGE_EXTS.includes(ext);
 }
 
+async function runWithConcurrency<T, R>(
+  items: T[],
+  concurrency: number,
+  fn: (item: T, index: number) => Promise<R>
+): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let currentIndex = 0;
+
+  const workers = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
+    while (currentIndex < items.length) {
+      const idx = currentIndex++;
+      results[idx] = await fn(items[idx], idx);
+    }
+  });
+
+  await Promise.all(workers);
+  return results;
+}
+
 export class FolderWatcherService {
   private watcher: any = null;
   public onNewProjectDetected?: (project: any) => void;
@@ -101,18 +120,64 @@ export class FolderWatcherService {
     const project: any = db.prepare('SELECT * FROM projects WHERE id = ?').get(projectId);
     if (!project) throw new Error('Không tìm thấy công trình này');
 
-    const videos: any[] = db.prepare('SELECT * FROM video_sources WHERE project_id = ?').all(projectId);
-    if (videos.length === 0) return;
+    // 1. Tự động đồng bộ các file từ ổ đĩa vào DB nếu thư mục tồn tại
+    if (fs.existsSync(project.folder_path)) {
+      const mediaFiles: string[] = [];
+      const scanDir = (dir: string, depth = 0) => {
+        if (depth > 2) return;
+        try {
+          const entries = fs.readdirSync(dir, { withFileTypes: true });
+          for (const entry of entries) {
+            const full = path.join(dir, entry.name);
+            if (entry.isDirectory()) {
+              scanDir(full, depth + 1);
+            } else if (entry.isFile()) {
+              const ext = path.extname(entry.name).toLowerCase();
+              if (MEDIA_EXTS.includes(ext)) {
+                mediaFiles.push(full);
+              }
+            }
+          }
+        } catch (_) {}
+      };
 
-    let processed = 0;
-    const stageCounts: Record<string, number> = {};
+      scanDir(project.folder_path);
 
-    for (const video of videos) {
-      if (onProgress) {
-        const pct = Math.round((processed / videos.length) * 100);
-        onProgress(pct, `Đang phân tích clip ${processed + 1}/${videos.length}: ${video.file_name}`);
+      for (const filePath of mediaFiles) {
+        const fileName = path.basename(filePath);
+        const existing = db.prepare('SELECT id FROM video_sources WHERE file_path = ?').get(filePath);
+        if (!existing) {
+          const videoId = `vid_${uuidv4().slice(0, 8)}`;
+          db.prepare(`
+            INSERT INTO video_sources (id, project_id, file_name, file_path, is_analyzed)
+            VALUES (?, ?, ?, ?, 0)
+          `).run(videoId, project.id, fileName, filePath);
+        }
       }
 
+      if (mediaFiles.length > 0) {
+        const placeholders = mediaFiles.map(() => '?').join(',');
+        db.prepare(`DELETE FROM video_sources WHERE project_id = ? AND file_path NOT IN (${placeholders})`).run(project.id, ...mediaFiles);
+      }
+    }
+
+    const videos: any[] = db.prepare('SELECT * FROM video_sources WHERE project_id = ?').all(projectId);
+    if (videos.length === 0) {
+      throw new Error(`Công trình "${project.folder_name}" không có file video/ảnh nào để phân tích.`);
+    }
+
+    // Cập nhật tổng số video
+    db.prepare('UPDATE projects SET total_videos = ? WHERE id = ?').run(videos.length, projectId);
+
+    let completed = 0;
+    const stageCounts: Record<string, number> = {};
+
+    if (onProgress) {
+      onProgress(5, `Bắt đầu phân tích AI cho ${videos.length} media clips...`);
+    }
+
+    // 2. Chạy phân tích AI song song 4 luồng (Concurrency Pool)
+    await runWithConcurrency(videos, 4, async (video) => {
       try {
         // Đo đạc metadata
         const meta = await getVideoMetadata(video.file_path);
@@ -147,10 +212,14 @@ export class FolderWatcherService {
         console.error(`[Watcher] Error embedding video ${video.file_name}:`, err);
       }
 
-      processed++;
-    }
+      completed++;
+      if (onProgress) {
+        const pct = 5 + Math.round((completed / videos.length) * 90);
+        onProgress(Math.min(95, pct), `Đang phân tích AI clip ${completed}/${videos.length}: ${video.file_name}`);
+      }
+    });
 
-    // Đánh dấu project đã nhúng xong
+    // 3. Đánh dấu project đã nhúng xong
     db.prepare(`
       UPDATE projects 
       SET is_embedded = 1, stage_summary = ?, last_scanned_at = datetime('now') 

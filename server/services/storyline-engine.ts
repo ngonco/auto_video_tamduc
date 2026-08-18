@@ -97,9 +97,12 @@ export function generateStoryline(
     clipsByStage[stageKey].sort((a, b) => (b.aestheticScore || 0) - (a.aestheticScore || 0));
   });
 
-  // 3. Tính số lượng clip cần thiết để lấp đầy targetDuration
-  const idealClipDur = Math.max(minClipSec, Math.min(maxClipSec, 5.0));
-  const estimatedClipsCount = Math.max(1, Math.round(targetDuration / idealClipDur));
+  // 3. Tính số lượng clip cần thiết để lấp đầy targetDuration sao cho mỗi clip chuẩn 4.0s - 5.5s
+  const idealClipDur = Math.max(minClipSec, Math.min(maxClipSec, 5.0)); // 5.0s
+  let estimatedClipsCount = Math.max(1, Math.ceil(targetDuration / maxClipSec));
+  if (targetDuration / estimatedClipsCount < minClipSec && estimatedClipsCount > 1) {
+    estimatedClipsCount = Math.max(1, Math.round(targetDuration / idealClipDur));
+  }
   const exactClipDur = targetDuration / estimatedClipsCount;
 
   const timelineClips: TimelineClipItem[] = [];
@@ -172,13 +175,14 @@ export function generateStoryline(
     let sourceStart = 0;
 
     if (!isImg && candidate.duration > cutDuration) {
-      // Đối với video dài: mỗi lần lặp lại sẽ cắt ở một phân đoạn thời gian khác nhau
+      // Đối với video dài: mỗi lần sử dụng sẽ cắt ở các phân đoạn tịnh tiến khác nhau trong video gốc
       const usageIndex = videoUsageCount[candidate.id] || 0;
       videoUsageCount[candidate.id] = usageIndex + 1;
 
       const maxStart = Math.max(0, candidate.duration - cutDuration);
-      const step = maxStart > 0 ? maxStart / 3 : 0;
-      sourceStart = Math.min(maxStart, (usageIndex * step) % (maxStart + 0.1));
+      // Bước nhảy bằng độ dài cutDuration để các đoạn không bị trùng nội dung
+      sourceStart = (usageIndex * cutDuration) % (maxStart + 0.1);
+      if (sourceStart > maxStart) sourceStart = maxStart;
     }
 
     const tStart = Number(currentTimelineTime.toFixed(2));
@@ -213,4 +217,103 @@ export function generateStoryline(
     totalDuration: Number(targetDuration.toFixed(2)),
     clips: timelineClips,
   };
+}
+
+/**
+ * Hàm tự động bù và cân bằng lại các clips trên timeline khi xóa/sửa clip,
+ * đảm bảo mọi clip luôn duy trì thời lượng 4.0s - 5.5s (tối đa 6.0s).
+ */
+export function rebalanceTimelineClips(
+  currentClips: TimelineClipItem[],
+  availableSources: SourceClipRecord[],
+  totalDuration: number,
+  minClipSec: number = 4.0,
+  maxClipSec: number = 5.5
+): TimelineClipItem[] {
+  if (totalDuration <= 0) return currentClips;
+
+  // Nếu không còn clip nào, tự sinh lại toàn bộ từ availableSources
+  if (!currentClips || currentClips.length === 0) {
+    if (availableSources && availableSources.length > 0) {
+      return generateStoryline(availableSources, totalDuration, minClipSec, maxClipSec).clips;
+    }
+    return [];
+  }
+
+  const idealClipDur = Math.max(minClipSec, Math.min(maxClipSec, 5.0));
+  let neededCount = Math.max(1, Math.ceil(totalDuration / maxClipSec));
+  if (totalDuration / neededCount < minClipSec && neededCount > 1) {
+    neededCount = Math.max(1, Math.round(totalDuration / idealClipDur));
+  }
+
+  // Nếu số clip hiện tại ít hơn neededCount (do người dùng xóa bớt), ta bù thêm clip từ availableSources
+  let workingClips = [...currentClips];
+  const pool = availableSources && availableSources.length > 0 ? availableSources : currentClips.map(c => ({
+    id: c.sourceId || c.id,
+    projectId: '',
+    fileName: c.fileName,
+    filePath: c.filePath,
+    duration: c.sourceDuration || 5.0,
+    width: 1080,
+    height: 1920,
+    aspectRatioType: c.aspectRatioType,
+    stage: c.stage as any,
+    aestheticScore: 7.5,
+    sceneDescription: '',
+    thumbnailPath: c.thumbnailPath,
+    mediaType: c.mediaType,
+  }));
+
+  let fillIdx = 0;
+  while (workingClips.length < neededCount) {
+    const src = pool[fillIdx % pool.length];
+    fillIdx++;
+    workingClips.push({
+      id: `clip_fill_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      sourceId: src.id,
+      fileName: src.fileName,
+      filePath: src.filePath,
+      thumbnailPath: src.thumbnailPath,
+      stage: src.stage,
+      timelineStart: 0,
+      timelineEnd: 0,
+      sourceStart: 0,
+      sourceDuration: idealClipDur,
+      aspectRatioType: src.aspectRatioType,
+      mediaType: src.mediaType || (isImageFile(src.filePath) ? 'image' : 'video'),
+    });
+  }
+
+  const eachDur = totalDuration / workingClips.length;
+  let curTime = 0;
+  const videoUsageCount: Record<string, number> = {};
+
+  return workingClips.map((c, i) => {
+    const isLast = i === workingClips.length - 1;
+    const thisDur = isLast ? Math.max(0.1, totalDuration - curTime) : eachDur;
+    const isImg = c.mediaType === 'image' || isImageFile(c.filePath);
+
+    let srcStart = c.sourceStart || 0;
+    if (!isImg) {
+      const srcMatch = pool.find((p) => p.id === c.sourceId || p.filePath === c.filePath);
+      const srcTotalDur = srcMatch?.duration || 10;
+      if (srcTotalDur > thisDur) {
+        const usageIndex = videoUsageCount[c.filePath] || 0;
+        videoUsageCount[c.filePath] = usageIndex + 1;
+        const maxStart = Math.max(0, srcTotalDur - thisDur);
+        srcStart = (usageIndex * thisDur) % (maxStart + 0.1);
+        if (srcStart > maxStart) srcStart = maxStart;
+      }
+    }
+
+    const newClip: TimelineClipItem = {
+      ...c,
+      timelineStart: Number(curTime.toFixed(2)),
+      timelineEnd: Number((curTime + thisDur).toFixed(2)),
+      sourceStart: Number(srcStart.toFixed(2)),
+      sourceDuration: Number(thisDur.toFixed(2)),
+    };
+    curTime += thisDur;
+    return newClip;
+  });
 }

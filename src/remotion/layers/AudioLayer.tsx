@@ -8,7 +8,7 @@ interface AudioLayerProps {
   bgmVolume?: number;
 }
 
-export const AudioLayer: React.FC<AudioLayerProps> = ({
+export const AudioLayer: React.FC<AudioLayerProps> = React.memo(({
   voiceUrl,
   bgmUrl,
   voiceVolume = 1.0,
@@ -16,8 +16,23 @@ export const AudioLayer: React.FC<AudioLayerProps> = ({
 }) => {
   return (
     <>
-      {voiceUrl && <Audio src={voiceUrl} volume={voiceVolume} />}
-      {bgmUrl && <Audio src={bgmUrl} volume={bgmVolume} loop />}
+      {voiceUrl && (
+        <Audio
+          key={voiceUrl}
+          src={voiceUrl}
+          volume={voiceVolume}
+          pauseWhenBuffering
+        />
+      )}
+      {bgmUrl && (
+        <Audio
+          key={bgmUrl}
+          src={bgmUrl}
+          volume={bgmVolume}
+          loop
+          pauseWhenBuffering
+        />
+      )}
     </>
   );
-};
+});

@@ -1,4 +1,4 @@
-import React, { useState, useRef, useCallback, useEffect } from 'react';
+import React, { useState, useRef, useCallback, useEffect, useMemo } from 'react';
 import { Player, PlayerRef } from '@remotion/player';
 import {
   Download,
@@ -11,8 +11,16 @@ import {
   FolderOpen,
   ZoomIn,
   ZoomOut,
+  Maximize2,
   GripVertical,
+  Scissors,
   ArrowLeftRight,
+  Play,
+  Pause,
+  ExternalLink,
+  Eye,
+  Search,
+  Check,
 } from 'lucide-react';
 import {
   DndContext,
@@ -33,7 +41,7 @@ import {
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { MainVideo } from '../../remotion/MainVideo.js';
-import { MainVideoProps, SubtitleLine, TimelineClipItem } from '../../remotion/types.js';
+import { MainVideoProps, SubtitleLine, TimelineClipItem, SourceClipRecord } from '../../remotion/types.js';
 
 interface TimelineEditorProps {
   timelineData: {
@@ -44,6 +52,7 @@ interface TimelineEditorProps {
     duration: number;
     subtitles: SubtitleLine[];
     clips: TimelineClipItem[];
+    availableSources?: SourceClipRecord[];
   };
   onUpdateClips: (clips: TimelineClipItem[]) => void;
   onUpdateSubtitles: (subtitles: SubtitleLine[]) => void;
@@ -63,7 +72,13 @@ const STAGE_LABELS: Record<string, string> = {
   STAGE_4_WORSHIP_ALTAR: 'Lễ Phật',
 };
 
-const MIN_ZOOM = 0.5;
+const IMAGE_EXTS = ['.jpg', '.jpeg', '.png', '.webp', '.bmp'];
+function isImageFile(filePath: string): boolean {
+  const ext = (filePath || '').toLowerCase().split('?')[0].split('.').pop();
+  return ext ? IMAGE_EXTS.some((e) => e.endsWith(ext)) : false;
+}
+
+const MIN_ZOOM = 0.05;
 const MAX_ZOOM = 6.0;
 const LABEL_WIDTH = 100; // pixels for track label column
 const BASE_PX_PER_SEC = 120; // base pixels per second at zoom 1.0
@@ -76,8 +91,12 @@ interface SortableClipProps {
   index: number;
   totalClips: number;
   widthPx: number;
+  isSelected?: boolean;
+  onSelectClip: (id: string) => void;
   onMoveClip: (index: number, direction: 'left' | 'right') => void;
   onDeleteClip: (index: number) => void;
+  onReplaceFromExplorer: (clipId: string) => void;
+  onOpenProjectSourcesModal: (clipId: string) => void;
 }
 
 const SortableClip: React.FC<SortableClipProps> = ({
@@ -85,8 +104,12 @@ const SortableClip: React.FC<SortableClipProps> = ({
   index,
   totalClips,
   widthPx,
+  isSelected,
+  onSelectClip,
   onMoveClip,
   onDeleteClip,
+  onReplaceFromExplorer,
+  onOpenProjectSourcesModal,
 }) => {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: clip.id,
@@ -98,10 +121,10 @@ const SortableClip: React.FC<SortableClipProps> = ({
   const style: React.CSSProperties = {
     transform: CSS.Translate.toString(transform),
     transition,
-    width: Math.max(48, widthPx),
+    width: Math.max(4, widthPx),
     flexShrink: 0,
     opacity: isDragging ? 0.4 : 1,
-    zIndex: isDragging ? 50 : 1,
+    zIndex: isDragging ? 50 : isSelected ? 30 : 1,
     touchAction: 'none',
   };
 
@@ -111,23 +134,35 @@ const SortableClip: React.FC<SortableClipProps> = ({
       style={style}
       {...attributes}
       {...listeners}
-      className={`relative bg-slate-900/90 border rounded-lg flex flex-col overflow-hidden group cursor-grab active:cursor-grabbing select-none ${
+      onClick={(e) => {
+        e.stopPropagation();
+        onSelectClip(clip.id);
+      }}
+      title={`#${index + 1}: ${clip.fileName} (${clip.sourceDuration.toFixed(1)}s) - ${stageLabel} (Click để chọn)`}
+      className={`relative bg-slate-900/90 border rounded-lg flex flex-col overflow-hidden group cursor-grab active:cursor-grabbing select-none transition-all ${
         isDragging
           ? 'border-amber-400 ring-2 ring-amber-400/50 shadow-2xl shadow-amber-500/40'
+          : isSelected
+          ? 'border-amber-400 ring-2 ring-amber-400/80 shadow-lg shadow-amber-500/25 bg-slate-850'
           : 'border-slate-700/80 hover:border-slate-500'
       }`}
     >
       {/* Stage top border accent */}
-      <div className="h-[3px] w-full" style={{ backgroundColor: stageColor }} />
+      <div className="h-[3px] w-full flex-shrink-0" style={{ backgroundColor: stageColor }} />
 
-      {/* Grip header icon */}
-      <div className="absolute top-1 left-1.5 z-10 pointer-events-none bg-black/60 backdrop-blur-xs rounded px-1 py-0.5 flex items-center gap-1 border border-white/10">
-        <GripVertical className="w-3 h-3 text-amber-400" />
-        <span className="text-[8px] font-mono text-amber-300 font-bold">#{index + 1}</span>
-      </div>
+      {/* Grip header icon (hiển thị khi chiều rộng >= 30px) */}
+      {widthPx >= 30 && (
+        <div className="absolute top-1 left-1 z-10 pointer-events-none bg-black/70 backdrop-blur-xs rounded px-1 py-0.5 flex items-center gap-0.5 border border-white/10">
+          {widthPx >= 50 && <GripVertical className="w-3 h-3 text-amber-400" />}
+          <span className={`text-[8px] font-mono font-bold ${isSelected ? 'text-yellow-300' : 'text-amber-300'}`}>
+            #{index + 1}
+          </span>
+          {isSelected && <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse ml-0.5" />}
+        </div>
+      )}
 
       {/* Thumbnail */}
-      <div className="h-16 bg-black overflow-hidden relative pointer-events-none">
+      <div className="h-16 bg-black overflow-hidden relative pointer-events-none flex-shrink-0">
         {clip.thumbnailPath ? (
           <img
             src={`/media/thumbnails/${clip.thumbnailPath.split(/[\\/]/).pop()}`}
@@ -136,70 +171,104 @@ const SortableClip: React.FC<SortableClipProps> = ({
             draggable={false}
           />
         ) : (
-          <div className="w-full h-full flex items-center justify-center text-slate-600 text-[9px]">
-            No Thumb
+          <div className="w-full h-full flex items-center justify-center text-slate-600 text-[8px]">
+            {widthPx >= 40 ? 'No Thumb' : ''}
           </div>
         )}
-        {/* Time badge */}
-        <span className="absolute bottom-0.5 right-0.5 bg-black/80 font-mono text-[8px] px-1 py-[1px] rounded text-amber-300 border border-amber-500/30 font-bold">
-          {clip.sourceDuration.toFixed(1)}s
-        </span>
+        {/* Time badge (hiển thị khi chiều rộng >= 45px) */}
+        {widthPx >= 45 && (
+          <span className="absolute bottom-0.5 right-0.5 bg-black/80 font-mono text-[8px] px-1 py-[1px] rounded text-amber-300 border border-amber-500/30 font-bold">
+            {clip.sourceDuration.toFixed(1)}s
+          </span>
+        )}
       </div>
 
-      {/* Info */}
-      <div className="px-1.5 py-1 flex-1 min-h-0 pointer-events-none">
-        {widthPx > 60 && (
+      {/* Info (hiển thị linh hoạt theo chiều rộng) */}
+      <div className="px-1 py-0.5 flex-1 min-h-0 pointer-events-none overflow-hidden">
+        {widthPx >= 65 && (
           <p className="text-[9px] font-semibold text-slate-300 truncate leading-tight">
             {clip.fileName}
           </p>
         )}
-        <span
-          className="inline-block text-[8px] px-1 py-[0.5px] rounded font-medium mt-0.5 text-white/90"
-          style={{ backgroundColor: stageColor + '40', border: `1px solid ${stageColor}60` }}
-        >
-          {stageLabel}
-        </span>
+        {widthPx >= 40 && (
+          <span
+            className="inline-block text-[7px] px-1 py-[0.5px] rounded font-medium mt-0.5 text-white/90 truncate"
+            style={{ backgroundColor: stageColor + '40', border: `1px solid ${stageColor}60` }}
+          >
+            {stageLabel}
+          </span>
+        )}
       </div>
 
-      {/* Controls */}
-      <div
-        className="flex items-center justify-between px-1 py-0.5 border-t border-slate-800/80 bg-slate-950/80 opacity-0 group-hover:opacity-100 transition-opacity z-20"
-        onPointerDown={(e) => e.stopPropagation()}
-        onClick={(e) => e.stopPropagation()}
-      >
-        <button
-          onClick={(e) => {
-            e.stopPropagation();
-            onMoveClip(index, 'left');
-          }}
-          disabled={index === 0}
-          className="text-[9px] px-1.5 py-0.5 bg-slate-800 hover:bg-slate-700 rounded text-slate-300 disabled:opacity-30 cursor-pointer"
-          title="Di chuyển sang trái"
+      {/* Controls (hiển thị khi hover hoặc khi đang chọn, chiều rộng >= 40px) */}
+      {widthPx >= 40 && (
+        <div
+          className={`flex items-center justify-between px-1 py-0.5 border-t border-slate-800/80 bg-slate-950/95 transition-opacity z-20 gap-0.5 ${
+            isSelected ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
+          }`}
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={(e) => e.stopPropagation()}
         >
-          ◀
-        </button>
-        <button
-          onClick={(e) => {
-            e.stopPropagation();
-            onDeleteClip(index);
-          }}
-          className="text-slate-500 hover:text-red-400 p-0.5 cursor-pointer"
-          title="Xóa clip này"
-        >
-          <Trash2 className="w-3 h-3" />
-        </button>
-        <button
-          onClick={(e) => {
-            e.stopPropagation();
-            onMoveClip(index, 'right');
-          }}
-          disabled={index === totalClips - 1}
-          className="text-[9px] px-1.5 py-0.5 bg-slate-800 hover:bg-slate-700 rounded text-slate-300 disabled:opacity-30 cursor-pointer"
-          title="Di chuyển sang phải"
-        >
-          ▶
-        </button>
-      </div>
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onMoveClip(index, 'left');
+            }}
+            disabled={index === 0}
+            className="text-[8px] px-1 py-0.5 bg-slate-800 hover:bg-slate-700 rounded text-slate-300 disabled:opacity-30 cursor-pointer"
+            title="Di chuyển sang trái"
+          >
+            ◀
+          </button>
+
+          {/* Nút Đổi Source từ Explorer */}
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onReplaceFromExplorer(clip.id);
+            }}
+            className="text-[8px] px-1 py-0.5 bg-amber-500/20 hover:bg-amber-500/40 text-amber-300 rounded border border-amber-500/30 cursor-pointer flex items-center gap-0.5"
+            title="Đổi video/ảnh từ máy tính (mở Windows Explorer)"
+          >
+            <FolderOpen className="w-2.5 h-2.5 text-amber-400" />
+          </button>
+
+          {/* Nút Đổi Source từ Công Trình */}
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onOpenProjectSourcesModal(clip.id);
+            }}
+            className="text-[8px] px-1 py-0.5 bg-blue-500/20 hover:bg-blue-500/40 text-blue-300 rounded border border-blue-500/30 cursor-pointer flex items-center gap-0.5"
+            title="Chọn clip khác từ thư mục công trình"
+          >
+            <Film className="w-2.5 h-2.5 text-blue-400" />
+          </button>
+
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onDeleteClip(index);
+            }}
+            className="text-slate-500 hover:text-red-400 p-0.5 cursor-pointer"
+            title="Xóa clip này (tự bù clip giữ chuẩn 4-6s)"
+          >
+            <Trash2 className="w-3 h-3" />
+          </button>
+
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onMoveClip(index, 'right');
+            }}
+            disabled={index === totalClips - 1}
+            className="text-[8px] px-1 py-0.5 bg-slate-800 hover:bg-slate-700 rounded text-slate-300 disabled:opacity-30 cursor-pointer"
+            title="Di chuyển sang phải"
+          >
+            ▶
+          </button>
+        </div>
+      )}
     </div>
   );
 };
@@ -215,6 +284,9 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
   const playerRef = useRef<PlayerRef>(null);
   const timelineScrollRef = useRef<HTMLDivElement>(null);
 
+  // Player playback state
+  const [isPlaying, setIsPlaying] = useState<boolean>(false);
+
   // Audio settings
   const [voiceVolume, setVoiceVolume] = useState<number>(1.0);
   const [bgmVolume, setBgmVolume] = useState<number>(0.15);
@@ -225,12 +297,22 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
   const [editingSubId, setEditingSubId] = useState<string | null>(null);
   const [editingSubText, setEditingSubText] = useState<string>('');
 
+  // Selected clip state
+  const [selectedClipId, setSelectedClipId] = useState<string | null>(null);
+
+  // Project source selector modal state
+  const [showSourceModal, setShowSourceModal] = useState<boolean>(false);
+  const [replacingClipId, setReplacingClipId] = useState<string | null>(null);
+  const [projectSourceSearch, setProjectSourceSearch] = useState<string>('');
+  const [projectSourceStageFilter, setProjectSourceStageFilter] = useState<string>('ALL');
+
   // Render job states
   const [rendering, setRendering] = useState(false);
   const [renderJobId, setRenderJobId] = useState<string | null>(null);
   const [renderPercent, setRenderPercent] = useState<number>(0);
   const [renderMessage, setRenderMessage] = useState<string>('');
   const [renderOutputPath, setRenderOutputPath] = useState<string | null>(null);
+  const [showVideoModal, setShowVideoModal] = useState<boolean>(false);
 
   // Zoom & Pan state
   const [zoomLevel, setZoomLevel] = useState<number>(1.0);
@@ -274,23 +356,61 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
     fetch('/api/generator/bgm-list')
       .then((res) => res.json())
       .then((data) => {
-        if (data.success && data.data.length > 0) {
+        if (data.success && Array.isArray(data.data)) {
           setBgmList(data.data);
-          setSelectedBgm(data.data[0].filePath);
         }
-      });
+      })
+      .catch((err) => console.error('Failed to load BGM list:', err));
   }, []);
 
-  // ── Playhead sync: poll Remotion Player frame ──
+  // ── Playhead sync & isPlaying status: poll Remotion Player ──
   useEffect(() => {
     const interval = setInterval(() => {
       if (playerRef.current) {
         const frame = playerRef.current.getCurrentFrame();
         setCurrentFrame(frame);
+        setIsPlaying(playerRef.current.isPlaying());
       }
     }, 100);
     return () => clearInterval(interval);
   }, []);
+
+  // ── Spacebar toggle Play / Pause ──
+  const togglePlayPause = useCallback(() => {
+    if (!playerRef.current) return;
+    if (playerRef.current.isPlaying()) {
+      playerRef.current.pause();
+      setIsPlaying(false);
+    } else {
+      playerRef.current.play();
+      setIsPlaying(true);
+    }
+  }, []);
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement;
+      if (
+        target &&
+        (target.tagName === 'INPUT' ||
+          target.tagName === 'TEXTAREA' ||
+          target.isContentEditable ||
+          target.closest('input') ||
+          target.closest('textarea'))
+      ) {
+        return;
+      }
+
+      if (e.code === 'Space' || e.key === ' ') {
+        e.preventDefault();
+        e.stopPropagation();
+        togglePlayPause();
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [togglePlayPause]);
 
   // ── Native wheel listener with { passive: false } to intercept Ctrl+Scroll ──
   useEffect(() => {
@@ -301,8 +421,8 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
       if (e.ctrlKey || e.metaKey) {
         e.preventDefault();
         e.stopPropagation();
-        const delta = e.deltaY > 0 ? -0.15 : 0.15;
-        setZoomLevel((prev) => Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, prev + delta)));
+        const delta = e.deltaY > 0 ? -0.1 : 0.1;
+        setZoomLevel((prev) => Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, Number((prev + delta).toFixed(3)))));
       }
     };
 
@@ -310,7 +430,93 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
     return () => el.removeEventListener('wheel', handler);
   }, []);
 
-  // ── Helper: recalculate timeline positions after reorder ──
+  // ── Helper: Cân bằng & Tự bù clip giữ chuẩn 4.0s - 5.5s (Tối đa 6.0s) ──
+  const rebalanceClips = useCallback(
+    (clips: TimelineClipItem[]): TimelineClipItem[] => {
+      const total = totalDuration;
+      if (total <= 0) return clips;
+      const idealClipDur = 5.0;
+      let neededCount = Math.max(1, Math.ceil(total / 5.5));
+      if (total / neededCount < 4.0 && neededCount > 1) {
+        neededCount = Math.max(1, Math.round(total / idealClipDur));
+      }
+
+      let workingClips = [...clips];
+      const pool = (timelineData.availableSources && timelineData.availableSources.length > 0)
+        ? timelineData.availableSources
+        : clips.map((c) => ({
+            id: c.sourceId || c.id,
+            projectId: '',
+            fileName: c.fileName,
+            filePath: c.filePath,
+            duration: c.sourceDuration || 5.0,
+            width: 1080,
+            height: 1920,
+            aspectRatioType: c.aspectRatioType,
+            stage: c.stage,
+            aestheticScore: 7.5,
+            sceneDescription: '',
+            thumbnailPath: c.thumbnailPath,
+            mediaType: c.mediaType,
+          }));
+
+      let fillIdx = 0;
+      while (workingClips.length < neededCount) {
+        const src = pool[fillIdx % pool.length];
+        fillIdx++;
+        workingClips.push({
+          id: `clip_fill_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+          sourceId: src.id,
+          fileName: src.fileName,
+          filePath: src.filePath,
+          thumbnailPath: src.thumbnailPath,
+          stage: src.stage,
+          timelineStart: 0,
+          timelineEnd: 0,
+          sourceStart: 0,
+          sourceDuration: idealClipDur,
+          aspectRatioType: src.aspectRatioType,
+          mediaType: src.mediaType || (isImageFile(src.filePath) ? 'image' : 'video'),
+        });
+      }
+
+      const eachDur = total / workingClips.length;
+      let curTime = 0;
+      const videoUsageCount: Record<string, number> = {};
+
+      return workingClips.map((c, i) => {
+        const isLast = i === workingClips.length - 1;
+        const thisDur = isLast ? Math.max(0.1, total - curTime) : eachDur;
+        const isImg = c.mediaType === 'image' || isImageFile(c.filePath);
+
+        let srcStart = c.sourceStart || 0;
+        if (!isImg) {
+          const srcMatch = pool.find((p) => p.id === c.sourceId || p.filePath === c.filePath);
+          const srcTotalDur = srcMatch?.duration || 10;
+          if (srcTotalDur > thisDur) {
+            const usageIndex = videoUsageCount[c.filePath] || 0;
+            videoUsageCount[c.filePath] = usageIndex + 1;
+            const maxStart = Math.max(0, srcTotalDur - thisDur);
+            srcStart = (usageIndex * thisDur) % (maxStart + 0.1);
+            if (srcStart > maxStart) srcStart = maxStart;
+          }
+        }
+
+        const newClip: TimelineClipItem = {
+          ...c,
+          timelineStart: Number(curTime.toFixed(2)),
+          timelineEnd: Number((curTime + thisDur).toFixed(2)),
+          sourceStart: Number(srcStart.toFixed(2)),
+          sourceDuration: Number(thisDur.toFixed(2)),
+        };
+        curTime += thisDur;
+        return newClip;
+      });
+    },
+    [totalDuration, timelineData.availableSources]
+  );
+
+  // ── Helper: recalculate sequential timeline positions after simple drag/move ──
   const recalcTimelinePositions = useCallback(
     (clips: TimelineClipItem[]): TimelineClipItem[] => {
       const total = totalDuration;
@@ -351,10 +557,79 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
   const handleDeleteClip = useCallback(
     (index: number) => {
       if (timelineData.clips.length <= 1) return;
-      const newClips = timelineData.clips.filter((_, i) => i !== index);
-      onUpdateClips(recalcTimelinePositions(newClips));
+      const remaining = timelineData.clips.filter((_, i) => i !== index);
+      // Tự động bù clip để bảo đảm thời lượng 4.0s - 5.5s
+      onUpdateClips(rebalanceClips(remaining));
     },
-    [timelineData.clips, onUpdateClips, recalcTimelinePositions]
+    [timelineData.clips, onUpdateClips, rebalanceClips]
+  );
+
+  // ── Replace Clip from Windows Explorer ──
+  const handleReplaceClipFromExplorer = useCallback(
+    async (clipId: string) => {
+      try {
+        const res = await fetch('/api/generator/pick-media', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({}),
+        });
+        const data = await res.json();
+        if (data.success && data.file) {
+          const newClips = timelineData.clips.map((c) => {
+            if (c.id === clipId) {
+              return {
+                ...c,
+                sourceId: data.file.id,
+                fileName: data.file.fileName,
+                filePath: data.file.filePath,
+                thumbnailPath: data.file.thumbnailPath || c.thumbnailPath,
+                mediaType: data.file.mediaType || (isImageFile(data.file.filePath) ? 'image' : 'video'),
+                aspectRatioType: data.file.aspectRatioType || '9:16',
+                // Keep timelineStart, timelineEnd, sourceDuration preserved!
+              };
+            }
+            return c;
+          });
+          onUpdateClips(newClips);
+        }
+      } catch (err) {
+        console.error('[TimelineEditor] Replace clip from explorer error:', err);
+      }
+    },
+    [timelineData.clips, onUpdateClips]
+  );
+
+  // ── Open Project Sources Selector Modal ──
+  const handleOpenProjectSourceModal = useCallback((clipId: string) => {
+    setReplacingClipId(clipId);
+    setShowSourceModal(true);
+  }, []);
+
+  // ── Replace Clip from Project Sources ──
+  const handleSelectProjectSource = useCallback(
+    (source: SourceClipRecord) => {
+      if (!replacingClipId) return;
+      const newClips = timelineData.clips.map((c) => {
+        if (c.id === replacingClipId) {
+          return {
+            ...c,
+            sourceId: source.id,
+            fileName: source.fileName,
+            filePath: source.filePath,
+            thumbnailPath: source.thumbnailPath,
+            mediaType: source.mediaType || (isImageFile(source.filePath) ? 'image' : 'video'),
+            aspectRatioType: source.aspectRatioType,
+            stage: source.stage || c.stage,
+            // Keep timelineStart, timelineEnd, sourceDuration preserved!
+          };
+        }
+        return c;
+      });
+      onUpdateClips(newClips);
+      setShowSourceModal(false);
+      setReplacingClipId(null);
+    },
+    [replacingClipId, timelineData.clips, onUpdateClips]
   );
 
   // ── DnD reorder ──
@@ -404,26 +679,33 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
     [timelineData.subtitles, editingSubText, onUpdateSubtitles]
   );
 
-  // ── Zoom ──
+  // ── Zoom Controls ──
   const handleZoom = useCallback(
     (delta: number) => {
-      setZoomLevel((prev) => Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, prev + delta)));
+      setZoomLevel((prev) => Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, Number((prev + delta).toFixed(3)))));
     },
     []
   );
 
-  // ── Ctrl+Scroll to zoom ──
-  const handleWheel = useCallback(
-    (e: React.WheelEvent) => {
-      if (e.ctrlKey || e.metaKey) {
-        e.preventDefault();
-        e.stopPropagation();
-        const delta = e.deltaY > 0 ? -0.15 : 0.15;
-        handleZoom(delta);
-      }
-    },
-    [handleZoom]
-  );
+  // ── Fit Timeline 100% to view without scroll ──
+  const handleFitTimeline = useCallback(() => {
+    const el = timelineScrollRef.current;
+    if (!el || totalDuration <= 0) return;
+    const availableWidth = Math.max(100, el.clientWidth - 20);
+    const calculatedFit = availableWidth / (totalDuration * BASE_PX_PER_SEC);
+    const targetZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, Number(calculatedFit.toFixed(3))));
+    setZoomLevel(targetZoom);
+    el.scrollLeft = 0;
+  }, [totalDuration]);
+
+  // Auto-fit timeline on first load
+  useEffect(() => {
+    // Small delay to allow DOM to measure clientWidth
+    const timer = setTimeout(() => {
+      handleFitTimeline();
+    }, 150);
+    return () => clearTimeout(timer);
+  }, []);
 
   // ── Drag Pan ──
   const handlePanMouseDown = useCallback(
@@ -493,6 +775,8 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
       if (data.success) {
         setRenderJobId(data.jobId);
         pollRenderStatus(data.jobId);
+      } else {
+        setRenderMessage(`Lỗi khởi động render: ${data.error || 'Không xác định'}`);
       }
     } catch (err: any) {
       setRenderMessage(`Lỗi: ${err.message}`);
@@ -504,41 +788,66 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
       try {
         const res = await fetch(`/api/render/status/${jobId}`);
         const data = await res.json();
-        if (data.success) {
-          setRenderPercent(data.data.percent);
-          setRenderMessage(data.data.message);
+        if (data.success && data.data) {
+          setRenderPercent(data.data.percent || 0);
+          setRenderMessage(data.data.message || '');
           if (data.data.status === 'completed') {
             clearInterval(interval);
-            setRenderOutputPath(data.data.outputPath);
+            setRenderPercent(100);
+            setRenderMessage(data.data.message || 'Xuất video thành công!');
+            if (data.data.outputPath) {
+              setRenderOutputPath(data.data.outputPath);
+            }
           } else if (data.data.status === 'error') {
             clearInterval(interval);
+            setRenderMessage(`Render thất bại: ${data.data.error || data.data.message}`);
           }
         }
-      } catch (_) {}
+      } catch (err) {
+        console.error('[TimelineEditor] Poll status error:', err);
+      }
     }, 1000);
   };
 
-  const handleOpenExportFolder = () => {
-    fetch('/api/render/open-folder', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ filePath: renderOutputPath }),
-    });
+  const handleOpenExportFolder = async () => {
+    try {
+      await fetch('/api/render/open-folder', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ filePath: renderOutputPath }),
+      });
+    } catch (err) {
+      console.error('[TimelineEditor] Open folder error:', err);
+    }
   };
 
-  // ── Ruler tick marks ──
+  const handlePlayExternal = async () => {
+    try {
+      await fetch('/api/render/open-video', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ filePath: renderOutputPath }),
+      });
+    } catch (err) {
+      console.error('[TimelineEditor] Play external error:', err);
+    }
+  };
+
+  // ── Ruler tick marks (Thích ứng linh hoạt theo mọi mức Zoom) ──
   const generateRulerTicks = () => {
     const ticks: { time: number; major: boolean }[] = [];
-    // Determine tick interval based on zoom
     let interval = 1;
-    if (zoomLevel < 0.8) interval = 5;
+    if (zoomLevel < 0.12) interval = 30;
+    else if (zoomLevel < 0.25) interval = 15;
+    else if (zoomLevel < 0.5) interval = 10;
+    else if (zoomLevel < 0.8) interval = 5;
     else if (zoomLevel < 1.5) interval = 2;
     else if (zoomLevel < 3) interval = 1;
     else interval = 0.5;
 
     for (let t = 0; t <= totalDuration; t += interval) {
-      const isMajor = interval >= 1 ? t % (interval * 2 === 0 ? 2 : Math.max(2, interval)) === 0 : t % 1 === 0;
-      ticks.push({ time: Number(t.toFixed(1)), major: t % Math.max(1, interval * 2) === 0 });
+      const isMajor = interval >= 1 ? t % (interval * 2) === 0 : t % 1 === 0;
+      ticks.push({ time: Number(t.toFixed(1)), major: isMajor });
     }
     return ticks;
   };
@@ -554,22 +863,34 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
   const playheadTimeSec = currentFrame / fps;
   const playheadPx = playheadTimeSec * pxPerSec;
 
-  // ── Composition props ──
-  const compositionProps: MainVideoProps = {
-    durationInFrames,
-    fps,
-    width: 1080,
-    height: 1920,
-    clips: timelineData.clips,
-    subtitles: timelineData.subtitles,
-    voiceUrl: timelineData.voiceUrl,
-    bgmUrl: selectedBgm ? `/media/bgm/${selectedBgm.split(/[\\/]/).pop()}` : undefined,
-    voiceVolume,
-    bgmVolume,
-    fontFamily: 'Be Vietnam Pro',
-    activeWordColor: '#FFD700',
-    inactiveWordColor: '#FFFFFF',
-  };
+  // ── Composition props (Memoized để bảo toàn luồng âm thanh Audio/Video không bị khởi tạo lại liên tục) ──
+  const compositionProps: MainVideoProps = useMemo(
+    () => ({
+      durationInFrames,
+      fps,
+      width: 1080,
+      height: 1920,
+      clips: timelineData.clips,
+      subtitles: timelineData.subtitles,
+      voiceUrl: timelineData.voiceUrl,
+      bgmUrl: selectedBgm ? `/media/bgm/${selectedBgm.split(/[\\/]/).pop()}` : undefined,
+      voiceVolume,
+      bgmVolume,
+      fontFamily: 'Be Vietnam Pro',
+      activeWordColor: '#FFD700',
+      inactiveWordColor: '#FFFFFF',
+    }),
+    [
+      durationInFrames,
+      fps,
+      timelineData.clips,
+      timelineData.subtitles,
+      timelineData.voiceUrl,
+      selectedBgm,
+      voiceVolume,
+      bgmVolume,
+    ]
+  );
 
   return (
     <div className="flex flex-col h-[calc(100vh-4rem)] bg-[#0B0F19] text-slate-100 overflow-hidden">
@@ -676,12 +997,49 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
             </div>
           </div>
 
-          {/* Render Export Button */}
-          <div className="pt-6 border-t border-slate-800">
+          {/* Render Export & Exported Video Card */}
+          <div className="pt-5 border-t border-slate-800 space-y-3">
+            {renderOutputPath && (
+              <div className="p-3.5 bg-gradient-to-r from-emerald-950/60 to-slate-900 border border-emerald-500/40 rounded-xl shadow-lg">
+                <div className="flex items-center justify-between mb-2">
+                  <div className="flex items-center gap-1.5 truncate">
+                    <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse flex-shrink-0" />
+                    <span className="text-[11px] font-bold text-emerald-300 truncate">
+                      Video Vừa Xuất Hoàn Tất
+                    </span>
+                  </div>
+                  <span className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-300 font-bold">
+                    1080x1920
+                  </span>
+                </div>
+                <p className="text-[10px] text-slate-300 font-mono truncate mb-2.5">
+                  {renderOutputPath.split(/[\\/]/).pop()}
+                </p>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    onClick={() => setShowVideoModal(true)}
+                    className="py-2 bg-gradient-to-r from-amber-500 to-yellow-400 hover:from-amber-600 hover:to-yellow-500 text-slate-950 font-extrabold text-[11px] rounded-lg shadow flex items-center justify-center gap-1.5 transition cursor-pointer active:scale-95"
+                    title="Xem video trực tiếp trên trình duyệt"
+                  >
+                    <Play className="w-3.5 h-3.5 fill-current" />
+                    Xem Video
+                  </button>
+                  <button
+                    onClick={handleOpenExportFolder}
+                    className="py-2 bg-slate-800 hover:bg-slate-700 text-amber-300 border border-amber-500/30 font-bold text-[11px] rounded-lg shadow flex items-center justify-center gap-1.5 transition cursor-pointer active:scale-95"
+                    title="Mở thư mục chứa video trong Windows Explorer"
+                  >
+                    <FolderOpen className="w-3.5 h-3.5 text-amber-400" />
+                    Mở Thư Mục
+                  </button>
+                </div>
+              </div>
+            )}
+
             <button
               onClick={handleStartRender}
               disabled={rendering}
-              className="w-full py-3.5 bg-gradient-to-r from-amber-500 via-yellow-500 to-amber-500 hover:from-amber-600 hover:to-yellow-600 text-slate-950 font-extrabold text-xs rounded-xl shadow-lg shadow-amber-500/20 transition flex items-center justify-center gap-2 disabled:opacity-50"
+              className="w-full py-3.5 bg-gradient-to-r from-amber-500 via-yellow-500 to-amber-500 hover:from-amber-600 hover:to-yellow-600 text-slate-950 font-extrabold text-xs rounded-xl shadow-lg shadow-amber-500/20 transition flex items-center justify-center gap-2 disabled:opacity-50 cursor-pointer"
             >
               <Download className="w-4 h-4 stroke-[2.5]" />
               XUẤT VIDEO (RENDER MP4 1080x1920)
@@ -697,7 +1055,26 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
       >
         {/* Timeline Toolbar */}
         <div className="h-9 px-4 bg-slate-900/90 border-b border-slate-800 flex items-center justify-between text-xs text-slate-400 flex-shrink-0">
-          <div className="flex items-center gap-4 font-mono text-[11px]">
+          <div className="flex items-center gap-3 font-mono text-[11px]">
+            {/* Nút Play / Pause phím tắt Space */}
+            <button
+              onClick={togglePlayPause}
+              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-bold shadow transition cursor-pointer ${
+                isPlaying
+                  ? 'bg-amber-500 hover:bg-amber-600 text-slate-950 shadow-amber-500/20'
+                  : 'bg-emerald-500 hover:bg-emerald-600 text-slate-950 shadow-emerald-500/20'
+              }`}
+              title="Phát / Dừng video (Phím tắt: Space)"
+            >
+              {isPlaying ? (
+                <Pause className="w-3.5 h-3.5 fill-current" />
+              ) : (
+                <Play className="w-3.5 h-3.5 fill-current" />
+              )}
+              <span>{isPlaying ? 'Dừng' : 'Phát'}</span>
+              <span className="text-[9px] font-mono opacity-80">(Space)</span>
+            </button>
+
             <span className="text-amber-400 font-bold">TIMELINE 9:16</span>
             <span>
               {formatTime(playheadTimeSec)} / {formatTime(totalDuration)}
@@ -706,32 +1083,117 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
             <span className="text-slate-500">
               Frame {currentFrame} / {durationInFrames}
             </span>
+
+            {/* Quick Actions cho Clip đang chọn */}
+            {selectedClipId && (() => {
+              const selIdx = timelineData.clips.findIndex((c) => c.id === selectedClipId);
+              if (selIdx === -1) return null;
+              return (
+                <div className="flex items-center gap-1.5 bg-amber-500/10 border border-amber-500/40 rounded-lg px-2 py-0.5">
+                  <span className="text-[10px] text-amber-300 font-bold font-sans">
+                    Clip #{selIdx + 1}:
+                  </span>
+                  <button
+                    onClick={() => handleReplaceClipFromExplorer(selectedClipId)}
+                    className="flex items-center gap-1 px-2 py-0.5 bg-amber-500/25 hover:bg-amber-500/40 text-amber-300 text-[10px] font-bold rounded border border-amber-500/40 transition cursor-pointer font-sans"
+                    title="Mở Windows Explorer chọn video/ảnh mới từ máy tính"
+                  >
+                    <FolderOpen className="w-3 h-3 text-amber-400" />
+                    <span>Đổi từ Máy Tính</span>
+                  </button>
+                  <button
+                    onClick={() => handleOpenProjectSourceModal(selectedClipId)}
+                    className="flex items-center gap-1 px-2 py-0.5 bg-blue-500/25 hover:bg-blue-500/40 text-blue-300 text-[10px] font-bold rounded border border-blue-500/40 transition cursor-pointer font-sans"
+                    title="Chọn clip khác có sẵn trong thư mục công trình"
+                  >
+                    <Film className="w-3 h-3 text-blue-400" />
+                    <span>Đổi từ Công Trình</span>
+                  </button>
+                  <button
+                    onClick={() => setSelectedClipId(null)}
+                    className="text-slate-400 hover:text-white text-[10px] px-1 font-sans cursor-pointer"
+                    title="Bỏ chọn"
+                  >
+                    ✕
+                  </button>
+                </div>
+              );
+            })()}
+
+            {renderOutputPath && (
+              <span className="hidden md:inline-flex items-center gap-1 text-[10px] text-emerald-400 font-sans font-semibold ml-2">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+                Đã xuất video MP4
+              </span>
+            )}
           </div>
 
-          {/* Zoom Controls */}
+          {/* Zoom & Action Controls */}
           <div className="flex items-center gap-2">
-            <span className="text-[10px] text-slate-500 mr-1">Zoom:</span>
+            {renderOutputPath && (
+              <>
+                <button
+                  onClick={() => setShowVideoModal(true)}
+                  className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 transition text-[11px] font-bold border border-emerald-500/40 cursor-pointer"
+                  title="Xem video vừa xuất"
+                >
+                  <Play className="w-3 h-3 fill-current" />
+                  <span>Xem Video</span>
+                </button>
+                <button
+                  onClick={handleOpenExportFolder}
+                  className="flex items-center gap-1 px-2 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-amber-300 transition text-[11px] font-medium border border-slate-700 cursor-pointer"
+                  title="Mở thư mục video trên Windows Explorer"
+                >
+                  <FolderOpen className="w-3.5 h-3.5 text-amber-400" />
+                  <span>Thư Mục</span>
+                </button>
+              </>
+            )}
+
+            {/* Nút Xem Toàn Bộ Fit 100% */}
             <button
-              onClick={() => handleZoom(-0.25)}
-              className="p-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-amber-400 transition"
-              title="Thu nhỏ"
+              onClick={handleFitTimeline}
+              className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 hover:text-amber-200 transition text-[11px] font-bold border border-amber-500/30 shadow-xs cursor-pointer"
+              title="Tự động thu phóng vừa khít 100% màn hình để thấy hết toàn bộ timeline"
             >
-              <ZoomOut className="w-3.5 h-3.5" />
+              <Maximize2 className="w-3.5 h-3.5 text-amber-400" />
+              <span>Fit Toàn Bộ</span>
             </button>
-            <span className="font-mono text-[11px] text-amber-400 font-bold w-10 text-center">
-              {zoomLevel.toFixed(1)}x
-            </span>
+
+            <div className="flex items-center gap-1 bg-slate-800/80 rounded-lg p-0.5 border border-slate-700">
+              <button
+                onClick={() => handleZoom(-0.25)}
+                className="p-1 rounded hover:bg-slate-700 text-slate-300 hover:text-amber-400 transition cursor-pointer"
+                title="Thu nhỏ (Zoom Out)"
+              >
+                <ZoomOut className="w-3.5 h-3.5" />
+              </button>
+              <span className="font-mono text-[10px] text-amber-400 font-bold w-11 text-center select-none">
+                {zoomLevel.toFixed(2)}x
+              </span>
+              <button
+                onClick={() => handleZoom(0.25)}
+                className="p-1 rounded hover:bg-slate-700 text-slate-300 hover:text-amber-400 transition cursor-pointer"
+                title="Phóng to (Zoom In)"
+              >
+                <ZoomIn className="w-3.5 h-3.5" />
+              </button>
+            </div>
+
+            {/* Nút Cân Bằng Chuẩn 4-6s */}
             <button
-              onClick={() => handleZoom(0.25)}
-              className="p-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-amber-400 transition"
-              title="Phóng to"
+              onClick={() => onUpdateClips(rebalanceClips(timelineData.clips))}
+              className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-amber-300 border border-slate-700 text-[11px] font-semibold transition cursor-pointer"
+              title="Tự động phân bổ lại toàn bộ clip để mỗi đoạn đạt chuẩn 4.0s - 5.5s"
             >
-              <ZoomIn className="w-3.5 h-3.5" />
+              <Scissors className="w-3.5 h-3.5 text-amber-400" />
+              <span>Cắt Chuẩn 4-6s</span>
             </button>
 
             <span className="text-slate-700 mx-1">|</span>
-            <span className="text-[10px] text-slate-600 italic">
-              Ctrl+Scroll zoom • Shift+Drag pan • Kéo clip đổi vị trí
+            <span className="text-[10px] text-slate-500 italic hidden lg:inline">
+              Phím Space: Phát/Dừng • Ctrl+Scroll zoom • Kéo thả đổi vị trí
             </span>
           </div>
         </div>
@@ -770,7 +1232,7 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
             onMouseUp={handlePanMouseUp}
             onMouseLeave={handlePanMouseUp}
           >
-            <div className="relative" style={{ width: trackWidth, minHeight: '100%' }}>
+            <div className="relative" style={{ width: Math.max(100, trackWidth), minHeight: '100%' }}>
               {/* ── Ruler ── */}
               <div
                 className="h-6 border-b border-slate-700/60 relative cursor-pointer bg-slate-900/30"
@@ -785,7 +1247,7 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
                         className={`${tick.major ? 'h-6 border-slate-600' : 'h-3 border-slate-800'}`}
                         style={{ borderLeft: '1px solid' }}
                       />
-                      {(tick.major || zoomLevel >= 2) && (
+                      {(tick.major || zoomLevel >= 1.5) && (
                         <span
                           className="absolute text-[8px] font-mono text-slate-500 select-none"
                           style={{ top: tick.major ? 1 : 0, left: 3, whiteSpace: 'nowrap' }}
@@ -820,8 +1282,12 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
                             index={idx}
                             totalClips={timelineData.clips.length}
                             widthPx={widthPx}
+                            isSelected={selectedClipId === clip.id}
+                            onSelectClip={setSelectedClipId}
                             onMoveClip={handleMoveClip}
                             onDeleteClip={handleDeleteClip}
+                            onReplaceFromExplorer={handleReplaceClipFromExplorer}
+                            onOpenProjectSourcesModal={handleOpenProjectSourceModal}
                           />
                         );
                       })}
@@ -838,7 +1304,7 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
                         <div
                           className="bg-slate-900 border-2 border-amber-400 rounded-lg flex flex-col overflow-hidden shadow-2xl shadow-amber-500/50 opacity-95 pointer-events-none"
                           style={{
-                            width: Math.max(48, activeClip.sourceDuration * pxPerSec),
+                            width: Math.max(20, activeClip.sourceDuration * pxPerSec),
                             height: 98,
                           }}
                         >
@@ -871,14 +1337,14 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
               <div className="relative min-h-[48px] h-[48px]">
                 {timelineData.subtitles.map((sub) => {
                   const subDuration = sub.end - sub.start;
-                  const widthPx = Math.max(20, subDuration * pxPerSec);
+                  const widthPx = Math.max(4, subDuration * pxPerSec);
                   const leftPx = sub.start * pxPerSec;
                   const isEditing = editingSubId === sub.id;
 
                   return (
                     <div
                       key={sub.id}
-                      className={`absolute top-1 bottom-1 bg-slate-900/80 border rounded-md flex flex-col justify-center px-1.5 py-0.5 text-[9px] overflow-hidden ${
+                      className={`absolute top-1 bottom-1 bg-slate-900/80 border rounded-md flex flex-col justify-center px-1 py-0.5 text-[9px] overflow-hidden ${
                         isEditing
                           ? 'border-amber-500 bg-amber-500/10 z-20'
                           : 'border-yellow-500/20 hover:border-yellow-500/40 z-10'
@@ -900,13 +1366,13 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
                           <div className="flex justify-end gap-1">
                             <button
                               onClick={() => setEditingSubId(null)}
-                              className="px-1.5 py-[1px] bg-slate-800 text-[8px] rounded text-slate-300"
+                              className="px-1.5 py-[1px] bg-slate-800 text-[8px] rounded text-slate-300 cursor-pointer"
                             >
                               Hủy
                             </button>
                             <button
                               onClick={() => handleSaveSubtitle(sub.id)}
-                              className="px-1.5 py-[1px] bg-amber-500 text-[8px] rounded text-black font-bold"
+                              className="px-1.5 py-[1px] bg-amber-500 text-[8px] rounded text-black font-bold cursor-pointer"
                             >
                               Lưu
                             </button>
@@ -919,9 +1385,9 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
                             setEditingSubText(sub.text);
                           }}
                           className="text-[10px] text-slate-200 font-medium truncate cursor-pointer hover:text-amber-300 leading-tight"
-                          title={`${sub.start.toFixed(1)}s - ${sub.end.toFixed(1)}s | Click để sửa`}
+                          title={`${sub.start.toFixed(1)}s - ${sub.end.toFixed(1)}s: "${sub.text}" (Click để sửa)`}
                         >
-                          {sub.text}
+                          {widthPx >= 25 ? sub.text : '•••'}
                         </p>
                       )}
                     </div>
@@ -958,24 +1424,39 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
       {/* ════════ RENDER PROGRESS MODAL ════════ */}
       {rendering && (
         <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-6">
-          <div className="bg-[#151D2E] border border-amber-500/40 rounded-3xl p-8 max-w-md w-full text-center shadow-2xl">
+          <div className="bg-[#151D2E] border border-amber-500/40 rounded-3xl p-8 max-w-lg w-full text-center shadow-2xl relative">
+            {/* Close Button top right */}
+            {renderPercent >= 100 && (
+              <button
+                onClick={() => setRendering(false)}
+                className="absolute top-4 right-4 w-7 h-7 rounded-full bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white flex items-center justify-center text-xs transition cursor-pointer"
+                title="Đóng cửa sổ"
+              >
+                ✕
+              </button>
+            )}
+
             <div className="w-16 h-16 rounded-2xl bg-amber-500/20 text-amber-400 flex items-center justify-center mx-auto mb-4 border border-amber-500/30">
               {renderPercent >= 100 ? (
-                <CheckCircle className="w-8 h-8 text-emerald-400" />
+                <CheckCircle className="w-9 h-9 text-emerald-400" />
               ) : (
                 <RefreshCw className="w-8 h-8 animate-spin" />
               )}
             </div>
 
-            <h3 className="text-lg font-bold text-slate-100 font-montserrat">
-              {renderPercent >= 100 ? 'XUẤT VIDEO THÀNH CÔNG!' : 'Đang Render Video 9:16'}
+            <h3 className="text-xl font-extrabold text-slate-100 font-montserrat">
+              {renderPercent >= 100 ? 'XUẤT VIDEO THÀNH CÔNG! 🎉' : 'Đang Render Video 9:16'}
             </h3>
-            <p className="text-xs text-slate-400 mt-2 mb-6">{renderMessage}</p>
+            <p className="text-xs text-slate-400 mt-2 mb-5">{renderMessage}</p>
 
             {/* Progress Bar */}
-            <div className="w-full bg-slate-800 rounded-full h-3 mb-3 overflow-hidden border border-slate-700">
+            <div className="w-full bg-slate-800 rounded-full h-3.5 mb-2.5 overflow-hidden border border-slate-700">
               <div
-                className="bg-gradient-to-r from-amber-500 to-yellow-400 h-full rounded-full transition-all duration-300"
+                className={`h-full rounded-full transition-all duration-300 ${
+                  renderPercent >= 100
+                    ? 'bg-gradient-to-r from-emerald-400 to-teal-400'
+                    : 'bg-gradient-to-r from-amber-500 to-yellow-400'
+                }`}
                 style={{ width: `${renderPercent}%` }}
               />
             </div>
@@ -983,22 +1464,332 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
 
             {/* Completion Actions */}
             {renderPercent >= 100 && (
-              <div className="mt-6 flex gap-3">
+              <div className="mt-6 space-y-3.5 pt-4 border-t border-slate-800/80">
+                {renderOutputPath && (
+                  <p className="text-[11px] text-amber-300/90 font-mono bg-slate-900/90 py-1.5 px-3 rounded-lg border border-amber-500/20 truncate">
+                    📁 {renderOutputPath.split(/[\\/]/).pop()}
+                  </p>
+                )}
+
+                {/* 2 Nút Chính To & Nổi Bật */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <button
+                    onClick={() => setShowVideoModal(true)}
+                    className="py-3.5 bg-gradient-to-r from-amber-500 via-yellow-400 to-amber-500 hover:from-amber-600 hover:to-yellow-500 text-slate-950 rounded-xl text-xs font-extrabold shadow-lg shadow-amber-500/30 flex items-center justify-center gap-2 cursor-pointer transition active:scale-95"
+                  >
+                    <Play className="w-4 h-4 fill-current text-slate-950" />
+                    XEM VIDEO NGAY
+                  </button>
+
+                  <button
+                    onClick={handleOpenExportFolder}
+                    className="py-3.5 bg-slate-800 hover:bg-slate-700 text-amber-300 border border-amber-500/40 rounded-xl text-xs font-bold shadow-md flex items-center justify-center gap-2 cursor-pointer transition active:scale-95"
+                    title="Mở thư mục chứa file trong Windows Explorer"
+                  >
+                    <FolderOpen className="w-4 h-4 text-amber-400" />
+                    Mở Thư Mục Video
+                  </button>
+                </div>
+
+                {/* Các Nút Phụ */}
+                <div className="flex flex-wrap items-center justify-center gap-2 pt-1">
+                  <button
+                    onClick={handlePlayExternal}
+                    className="flex-1 min-w-[130px] py-2.5 bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-white rounded-xl text-[11px] font-medium border border-slate-700 flex items-center justify-center gap-1.5 cursor-pointer transition"
+                    title="Mở phát bằng ứng dụng video mặc định của Windows"
+                  >
+                    <ExternalLink className="w-3.5 h-3.5 text-slate-400" />
+                    Windows Player
+                  </button>
+
+                  {renderOutputPath && (
+                    <a
+                      href={`/media/stream?path=${encodeURIComponent(renderOutputPath)}`}
+                      download={renderOutputPath.split(/[\\/]/).pop()}
+                      className="flex-1 min-w-[120px] py-2.5 bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-white rounded-xl text-[11px] font-medium border border-slate-700 flex items-center justify-center gap-1.5 cursor-pointer transition text-center"
+                      title="Tải video MP4 trực tiếp về máy qua trình duyệt"
+                    >
+                      <Download className="w-3.5 h-3.5 text-slate-400" />
+                      Tải File MP4
+                    </a>
+                  )}
+
+                  <button
+                    onClick={() => setRendering(false)}
+                    className="px-5 py-2.5 bg-slate-900 hover:bg-slate-800 text-slate-400 hover:text-slate-200 rounded-xl text-[11px] font-medium border border-slate-800 cursor-pointer transition"
+                  >
+                    Đóng
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Error Actions */}
+            {renderMessage.startsWith('Render thất bại') && (
+              <div className="mt-6 pt-3">
                 <button
                   onClick={() => setRendering(false)}
-                  className="flex-1 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl text-xs font-semibold"
+                  className="px-6 py-2.5 bg-red-900/60 hover:bg-red-800 text-red-200 rounded-xl text-xs font-bold transition cursor-pointer"
                 >
-                  Đóng
-                </button>
-                <button
-                  onClick={handleOpenExportFolder}
-                  className="flex-1 py-2.5 bg-amber-500 hover:bg-amber-600 text-slate-950 rounded-xl text-xs font-bold shadow-lg flex items-center justify-center gap-1.5"
-                >
-                  <FolderOpen className="w-4 h-4" />
-                  Mở Thư Mục Video
+                  Đóng Thông Báo Lỗi
                 </button>
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* ════════ PROJECT SOURCE FOOTAGE SELECTOR MODAL ════════ */}
+      {showSourceModal && (
+        <div className="fixed inset-0 z-50 bg-black/90 backdrop-blur-md flex items-center justify-center p-4 md:p-6">
+          <div className="bg-[#111827] border border-amber-500/40 rounded-3xl p-6 max-w-4xl w-full flex flex-col shadow-2xl relative max-h-[88vh] overflow-hidden">
+            {/* Header */}
+            <div className="flex items-center justify-between pb-3 mb-4 border-b border-slate-800 flex-shrink-0">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-xl bg-blue-500/20 text-blue-400 flex items-center justify-center">
+                  <Film className="w-4 h-4" />
+                </div>
+                <div>
+                  <h4 className="text-base font-bold text-slate-100 font-montserrat">
+                    Chọn Footage Thay Thế Từ Công Trình: {timelineData.projectName}
+                  </h4>
+                  <p className="text-xs text-slate-400">
+                    Bảo toàn 100% thời lượng slot và vị trí trên timeline
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => {
+                  setShowSourceModal(false);
+                  setReplacingClipId(null);
+                }}
+                className="w-8 h-8 rounded-full bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white flex items-center justify-center text-xs font-bold transition cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Filter & Search Bar */}
+            <div className="flex flex-wrap items-center justify-between gap-3 mb-4 flex-shrink-0">
+              {/* Stage Filter Buttons */}
+              <div className="flex items-center gap-1.5 bg-slate-900 p-1 rounded-xl border border-slate-800 text-xs">
+                {['ALL', 'STAGE_1_RAW_CARPENTRY', 'STAGE_2_ASSEMBLY_FINISHING', 'STAGE_3_DECOR_FLOWERS', 'STAGE_4_WORSHIP_ALTAR'].map((st) => {
+                  const label = st === 'ALL' ? 'Tất cả' : STAGE_LABELS[st] || st;
+                  const isCur = projectSourceStageFilter === st;
+                  return (
+                    <button
+                      key={st}
+                      onClick={() => setProjectSourceStageFilter(st)}
+                      className={`px-3 py-1.5 rounded-lg font-medium transition cursor-pointer ${
+                        isCur
+                          ? 'bg-amber-500 text-slate-950 font-bold shadow'
+                          : 'text-slate-400 hover:text-slate-200'
+                      }`}
+                    >
+                      {label}
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* Search input */}
+              <div className="relative min-w-[220px]">
+                <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
+                <input
+                  value={projectSourceSearch}
+                  onChange={(e) => setProjectSourceSearch(e.target.value)}
+                  placeholder="Tìm theo tên file..."
+                  className="w-full bg-slate-900 border border-slate-700 text-slate-200 text-xs rounded-xl pl-9 pr-3 py-2 outline-none focus:border-amber-500"
+                />
+              </div>
+            </div>
+
+            {/* Source Footage Grid */}
+            <div className="flex-1 overflow-y-auto min-h-0 pr-1">
+              {(() => {
+                const pool = (timelineData.availableSources && timelineData.availableSources.length > 0)
+                  ? timelineData.availableSources
+                  : timelineData.clips.map((c) => ({
+                      id: c.sourceId || c.id,
+                      projectId: '',
+                      fileName: c.fileName,
+                      filePath: c.filePath,
+                      duration: c.sourceDuration || 5.0,
+                      width: 1080,
+                      height: 1920,
+                      aspectRatioType: c.aspectRatioType,
+                      stage: c.stage,
+                      aestheticScore: 7.5,
+                      sceneDescription: '',
+                      thumbnailPath: c.thumbnailPath,
+                      mediaType: c.mediaType,
+                    }));
+
+                const filtered = pool.filter((src) => {
+                  const matchStage = projectSourceStageFilter === 'ALL' || src.stage === projectSourceStageFilter;
+                  const matchText = !projectSourceSearch || src.fileName.toLowerCase().includes(projectSourceSearch.toLowerCase());
+                  return matchStage && matchText;
+                });
+
+                if (filtered.length === 0) {
+                  return (
+                    <div className="py-16 text-center text-slate-500 text-xs">
+                      Không tìm thấy video hoặc ảnh nào phù hợp bộ lọc.
+                    </div>
+                  );
+                }
+
+                return (
+                  <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
+                    {filtered.map((src, idx) => {
+                      const stColor = STAGE_COLORS[src.stage] || '#64748b';
+                      const stLabel = STAGE_LABELS[src.stage] || 'N/A';
+                      const isImg = src.mediaType === 'image' || isImageFile(src.filePath);
+
+                      return (
+                        <div
+                          key={idx}
+                          onClick={() => handleSelectProjectSource(src)}
+                          className="bg-slate-900/90 hover:bg-slate-850 border border-slate-800 hover:border-amber-400 rounded-xl overflow-hidden cursor-pointer group transition shadow-md hover:shadow-amber-500/20 flex flex-col"
+                        >
+                          {/* Stage bar */}
+                          <div className="h-1 w-full" style={{ backgroundColor: stColor }} />
+
+                          {/* Thumbnail */}
+                          <div className="h-28 bg-black relative overflow-hidden flex items-center justify-center">
+                            {src.thumbnailPath ? (
+                              <img
+                                src={`/media/thumbnails/${src.thumbnailPath.split(/[\\/]/).pop()}`}
+                                alt={src.fileName}
+                                className="w-full h-full object-cover group-hover:scale-105 transition duration-300"
+                              />
+                            ) : (
+                              <div className="text-slate-600 text-xs">No Thumb</div>
+                            )}
+
+                            {/* Badge type & duration */}
+                            <span className="absolute bottom-1 right-1 bg-black/80 font-mono text-[9px] px-1.5 py-0.5 rounded text-amber-300 border border-amber-500/30 font-bold">
+                              {isImg ? 'ẢNH' : `${src.duration.toFixed(1)}s`}
+                            </span>
+
+                            <span
+                              className="absolute top-1 left-1 text-[8px] px-1.5 py-0.5 rounded font-bold text-white shadow"
+                              style={{ backgroundColor: stColor }}
+                            >
+                              {stLabel}
+                            </span>
+                          </div>
+
+                          {/* Info */}
+                          <div className="p-2 flex-1 flex flex-col justify-between">
+                            <p className="text-[11px] font-semibold text-slate-200 truncate group-hover:text-amber-300 transition">
+                              {src.fileName}
+                            </p>
+                            <p className="text-[9px] text-slate-500 mt-1 flex items-center justify-between">
+                              <span>{src.aspectRatioType || '9:16'}</span>
+                              <span className="text-amber-400/80 font-medium group-hover:underline">Chọn clip này ➔</span>
+                            </p>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                );
+              })()}
+            </div>
+
+            {/* Footer */}
+            <div className="pt-3 mt-3 border-t border-slate-800 flex items-center justify-between text-xs flex-shrink-0">
+              <span className="text-slate-500 text-[11px]">
+                💡 Tip: Bạn cũng có thể bấm "Đổi từ máy tính" để chọn file bất kỳ ngoài công trình.
+              </span>
+              <button
+                onClick={() => {
+                  setShowSourceModal(false);
+                  setReplacingClipId(null);
+                }}
+                className="px-5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white rounded-xl font-bold transition cursor-pointer"
+              >
+                Đóng
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ════════ FULL VIDEO PREVIEW MODAL ════════ */}
+      {showVideoModal && renderOutputPath && (
+        <div className="fixed inset-0 z-50 bg-black/90 backdrop-blur-md flex items-center justify-center p-4 md:p-6">
+          <div className="bg-[#111827] border border-amber-500/40 rounded-3xl p-5 max-w-2xl w-full flex flex-col items-center shadow-2xl relative max-h-[92vh] overflow-hidden">
+            {/* Modal Header */}
+            <div className="w-full flex items-center justify-between pb-3 mb-3 border-b border-slate-800 flex-shrink-0">
+              <div className="flex items-center gap-2 truncate">
+                <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse flex-shrink-0" />
+                <h4 className="text-sm font-bold text-slate-100 font-montserrat truncate max-w-md">
+                  Xem Video Hoàn Chỉnh: {renderOutputPath.split(/[\\/]/).pop()}
+                </h4>
+              </div>
+              <button
+                onClick={() => setShowVideoModal(false)}
+                className="w-8 h-8 rounded-full bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white flex items-center justify-center text-xs font-bold transition cursor-pointer flex-shrink-0"
+                title="Đóng xem video"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Video Player 9:16 */}
+            <div className="relative flex-1 min-h-0 w-full flex items-center justify-center py-1">
+              <div className="h-full max-h-[66vh] aspect-[9/16] rounded-2xl overflow-hidden shadow-2xl border border-amber-500/30 bg-black flex items-center justify-center">
+                <video
+                  src={`/media/stream?path=${encodeURIComponent(renderOutputPath)}`}
+                  controls
+                  autoPlay
+                  playsInline
+                  className="w-full h-full object-contain"
+                />
+              </div>
+            </div>
+
+            {/* Modal Footer Actions */}
+            <div className="w-full flex flex-col sm:flex-row items-center justify-between gap-3 pt-3 mt-3 border-t border-slate-800 text-xs flex-shrink-0">
+              <div className="text-slate-400 text-[11px] truncate max-w-xs font-mono">
+                {renderOutputPath}
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  onClick={handleOpenExportFolder}
+                  className="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-amber-300 rounded-xl font-bold flex items-center gap-1.5 border border-amber-500/30 transition cursor-pointer"
+                  title="Mở thư mục chứa file trong Windows Explorer"
+                >
+                  <FolderOpen className="w-3.5 h-3.5 text-amber-400" />
+                  Mở Thư Mục
+                </button>
+                <button
+                  onClick={handlePlayExternal}
+                  className="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white rounded-xl font-medium flex items-center gap-1.5 border border-slate-700 transition cursor-pointer"
+                  title="Mở phát bằng ứng dụng video mặc định của Windows"
+                >
+                  <ExternalLink className="w-3.5 h-3.5" />
+                  Windows Player
+                </button>
+                <a
+                  href={`/media/stream?path=${encodeURIComponent(renderOutputPath)}`}
+                  download={renderOutputPath.split(/[\\/]/).pop()}
+                  className="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white rounded-xl font-medium flex items-center gap-1.5 border border-slate-700 transition cursor-pointer"
+                  title="Tải video MP4 về máy"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  Tải Về
+                </a>
+                <button
+                  onClick={() => setShowVideoModal(false)}
+                  className="px-4 py-2 bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold rounded-xl transition cursor-pointer"
+                >
+                  Đóng
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}

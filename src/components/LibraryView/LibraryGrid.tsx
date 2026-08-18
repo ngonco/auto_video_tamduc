@@ -116,20 +116,50 @@ export const LibraryGrid: React.FC<LibraryGridProps> = ({ onSelectProjectForGene
     }
   };
 
-  const handleScanProject = async (projectId: string, e: React.MouseEvent) => {
+  const [scanProgress, setScanProgress] = useState<Record<string, { percent: number; message: string }>>({});
+
+  const handleScanProject = async (projectId: string, folderName: string, e: React.MouseEvent) => {
     e.stopPropagation();
     try {
       setScanningProjectId(projectId);
+      setScanProgress((prev) => ({ ...prev, [projectId]: { percent: 0, message: 'Đang bắt đầu phân tích AI...' } }));
+
       const res = await fetch(`/api/library/projects/${projectId}/scan`, { method: 'POST' });
       const data = await res.json();
-      if (data.success) {
-        setTimeout(() => {
-          fetchProjects();
-          setScanningProjectId(null);
-        }, 3000);
+      if (!data.success) {
+        setToast({ type: 'error', text: `Lỗi: ${data.error || 'Không thể bắt đầu phân tích'}` });
+        setScanningProjectId(null);
+        return;
       }
-    } catch (err) {
+
+      // Bắt đầu poll tiến độ mỗi 1000ms
+      const pollInterval = setInterval(async () => {
+        try {
+          const statusRes = await fetch(`/api/library/projects/${projectId}/scan-status`);
+          const statusData = await statusRes.json();
+          if (statusData.success) {
+            const job = statusData.data;
+            setScanProgress((prev) => ({
+              ...prev,
+              [projectId]: { percent: job.percent, message: job.message },
+            }));
+
+            if (job.status === 'completed') {
+              clearInterval(pollInterval);
+              setScanningProjectId(null);
+              setToast({ type: 'success', text: `Đã hoàn tất phân tích AI cho công trình "${folderName}"!` });
+              fetchProjects();
+            } else if (job.status === 'error') {
+              clearInterval(pollInterval);
+              setScanningProjectId(null);
+              setToast({ type: 'error', text: job.message || 'Lỗi khi phân tích AI' });
+            }
+          }
+        } catch (_) {}
+      }, 1000);
+    } catch (err: any) {
       console.error('Error triggering scan:', err);
+      setToast({ type: 'error', text: `Lỗi phân tích AI: ${err.message}` });
       setScanningProjectId(null);
     }
   };
@@ -349,19 +379,19 @@ export const LibraryGrid: React.FC<LibraryGridProps> = ({ onSelectProjectForGene
                 <div className="p-5 pt-0 flex items-center gap-2">
                   {proj.is_embedded === 0 ? (
                     <button
-                      onClick={(e) => handleScanProject(proj.id, e)}
+                      onClick={(e) => handleScanProject(proj.id, proj.folder_name, e)}
                       disabled={isScanning}
                       className="flex-1 flex items-center justify-center gap-2 py-2.5 px-3 bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 rounded-xl text-xs font-bold transition disabled:opacity-50"
                     >
                       {isScanning ? (
                         <>
                           <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                          Đang Phân Tích...
+                          <span>{scanProgress[proj.id]?.percent ? `${scanProgress[proj.id].percent}%` : 'Đang Phân Tích...'}</span>
                         </>
                       ) : (
                         <>
                           <Sparkles className="w-3.5 h-3.5" />
-                          Nhúng AI Ngay
+                          <span>Nhúng AI Ngay</span>
                         </>
                       )}
                     </button>

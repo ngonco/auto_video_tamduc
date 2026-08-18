@@ -1,5 +1,5 @@
 import React from 'react';
-import { Sequence, useCurrentFrame, useVideoConfig, interpolate, OffthreadVideo, Img } from 'remotion';
+import { Sequence, useCurrentFrame, useVideoConfig, interpolate, Video, Img } from 'remotion';
 import { TimelineClipItem } from '../types.js';
 
 interface VideoLayerProps {
@@ -32,7 +32,6 @@ const SingleClipView: React.FC<SingleClipViewProps> = ({
 }) => {
   const frame = useCurrentFrame();
   const isImage = clip.mediaType === 'image' || isImageFile(clip.filePath);
-  const isHorizontal = clip.aspectRatioType === '16:9';
   const mediaSrc = `/media/stream?path=${encodeURIComponent(clip.filePath)}`;
 
   // Hiệu ứng Zoom nhẹ (Ken Burns scale 1.0x -> 1.10x) cho ảnh tĩnh
@@ -63,118 +62,40 @@ const SingleClipView: React.FC<SingleClipViewProps> = ({
         backgroundColor: '#000000',
       }}
     >
-      {isHorizontal ? (
-        <>
-          {/* Nền mờ (Blurred Backdrop) 1080x1920 cho media ngang 16:9 */}
-          <div
+      {/* Media hiển thị tràn khung hình dọc 9:16 (Scale Fill / Object-fit Cover) */}
+      <div
+        style={{
+          width: '100%',
+          height: '100%',
+          transform: `scale(${zoomScale})`,
+          transformOrigin: 'center center',
+          overflow: 'hidden',
+        }}
+      >
+        {isImage ? (
+          <Img
+            src={mediaSrc}
             style={{
-              position: 'absolute',
-              top: 0,
-              left: 0,
               width: '100%',
               height: '100%',
-              filter: 'blur(30px) brightness(0.6)',
-              transform: `scale(${1.2 * (isImage ? 1.0 + 0.04 * progress : 1.0)})`,
-              transformOrigin: 'center center',
+              objectFit: 'cover',
             }}
-          >
-            {isImage ? (
-              <Img
-                src={mediaSrc}
-                style={{
-                  width: '100%',
-                  height: '100%',
-                  objectFit: 'cover',
-                }}
-              />
-            ) : (
-              <OffthreadVideo
-                src={mediaSrc}
-                startFrom={startFromFrame}
-                volume={0}
-                muted
-                style={{
-                  width: '100%',
-                  height: '100%',
-                  objectFit: 'cover',
-                }}
-              />
-            )}
-          </div>
-
-          {/* Media chính rõ nét ở giữa khung hình 9:16 */}
-          <div
+          />
+        ) : (
+          <Video
+            src={mediaSrc}
+            startFrom={startFromFrame}
+            volume={0}
+            muted
+            pauseWhenBuffering
             style={{
-              position: 'absolute',
-              top: '50%',
-              left: '50%',
-              transform: `translate(-50%, -50%) scale(${zoomScale})`,
-              transformOrigin: 'center center',
               width: '100%',
-              maxHeight: '100%',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              boxShadow: '0 0 40px rgba(0,0,0,0.8)',
+              height: '100%',
+              objectFit: 'cover',
             }}
-          >
-            {isImage ? (
-              <Img
-                src={mediaSrc}
-                style={{
-                  width: '100%',
-                  objectFit: 'contain',
-                }}
-              />
-            ) : (
-              <OffthreadVideo
-                src={mediaSrc}
-                startFrom={startFromFrame}
-                volume={0}
-                muted
-                style={{
-                  width: '100%',
-                  objectFit: 'contain',
-                }}
-              />
-            )}
-          </div>
-        </>
-      ) : (
-        /* Media dọc 9:16 - Scale Fill sắc nét kèm Ken Burns zoom nhẹ nếu là ảnh */
-        <div
-          style={{
-            width: '100%',
-            height: '100%',
-            transform: `scale(${zoomScale})`,
-            transformOrigin: 'center center',
-            overflow: 'hidden',
-          }}
-        >
-          {isImage ? (
-            <Img
-              src={mediaSrc}
-              style={{
-                width: '100%',
-                height: '100%',
-                objectFit: 'cover',
-              }}
-            />
-          ) : (
-            <OffthreadVideo
-              src={mediaSrc}
-              startFrom={startFromFrame}
-              volume={0}
-              muted
-              style={{
-                width: '100%',
-                height: '100%',
-                objectFit: 'cover',
-              }}
-            />
-          )}
-        </div>
-      )}
+          />
+        )}
+      </div>
     </div>
   );
 };

@@ -56,7 +56,7 @@ PlayResY: 1920
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Karaoke,${fontFamily},52,&H00FFFFFF,&H0000D7FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,5,4,2,40,40,480,1
+Style: Karaoke,${fontFamily},50,&H0000D7FF,&H00FFFFFF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,3.5,2,2,40,40,420,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -66,11 +66,19 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     const startStr = formatAssTime(line.start);
     const endStr = formatAssTime(line.end);
 
-    // Xây dựng chuỗi Karaoke tag {\kf<centiseconds>} cho từng từ
+    // Xây dựng chuỗi Karaoke tag {\kf<centiseconds>} cho từng từ kèm thẻ {\k<gap>} cho khoảng lặng
     let karaokeText = '';
+    let lastTime = line.start;
+
     line.words.forEach((w) => {
+      const gapSec = w.start - lastTime;
+      if (gapSec > 0.04) {
+        const gapCenti = Math.max(1, Math.round(gapSec * 100));
+        karaokeText += `{\\k${gapCenti}}`;
+      }
       const durationCenti = Math.max(1, Math.round((w.end - w.start) * 100));
-      karaokeText += `{\\kf${durationCenti}}${w.word} `;
+      karaokeText += `{\\kf${durationCenti}}${w.word.toUpperCase()} `;
+      lastTime = w.end;
     });
 
     assContent += `Dialogue: 0,${startStr},${endStr},Karaoke,,0,0,0,,${karaokeText.trim()}\n`;
@@ -145,9 +153,7 @@ export async function renderFinalVideo(
           .input(clip.filePath)
           .inputOptions(['-loop 1', `-t ${duration}`]);
 
-        const filterString = clip.aspectRatioType === '16:9' 
-          ? `[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=20:5,scale=w='1080*(1+0.06*t/${duration})':h='1920*(1+0.06*t/${duration})':eval=frame,crop=1080:1920:(iw-1080)/2:(ih-1920)/2[bg];[0:v]scale=1080:-1[fg];[bg][fg]overlay=(W-w)/2:(H-h)/2,setsar=1,fps=30,scale=in_range=full:out_range=tv,format=yuv420p[outv]`
-          : `[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,scale=w='1080*(1+0.10*t/${duration})':h='1920*(1+0.10*t/${duration})':eval=frame,crop=1080:1920:(iw-1080)/2:(ih-1920)/2,setsar=1,fps=30,scale=in_range=full:out_range=tv,format=yuv420p[outv]`;
+        const filterString = `[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1,fps=30,format=yuv420p[outv]`;
 
         command
           .complexFilter(filterString)
@@ -160,14 +166,12 @@ export async function renderFinalVideo(
       } else {
         // Xử lý Video clip: Sử dụng -stream_loop -1 để đảm bảo clip ngắn không bị thiếu frame
         command
-          .inputOptions(['-stream_loop -1'])
           .input(clip.filePath)
+          .inputOptions(['-stream_loop -1'])
           .setStartTime(clip.sourceStart || 0)
           .setDuration(duration);
 
-        const filterString = clip.aspectRatioType === '16:9'
-          ? `[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=20:5[bg];[0:v]scale=1080:-1[fg];[bg][fg]overlay=(W-w)/2:(H-h)/2,setsar=1,fps=30,format=yuv420p[outv]`
-          : `[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1,fps=30,format=yuv420p[outv]`;
+        const filterString = `[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1,fps=30,format=yuv420p[outv]`;
 
         command
           .complexFilter(filterString)
@@ -237,23 +241,24 @@ export async function renderFinalVideo(
     onProgress(75, 'Đang hòa âm Voice, Nhạc Thiền BGM và ép phụ đề Karaoke 9:16...');
   }
 
-  const normalizedAssPath = assPath.replace(/\\/g, '/').replace(/:/g, '\\:');
+  const fontsDir = path.resolve(process.cwd(), 'assets', 'fonts').split(path.sep).join('/').replace(/:/g, '\\:');
+  const normalizedAssPath = assPath.split(path.sep).join('/').replace(/:/g, '\\:');
 
   await new Promise<void>((resolve, reject) => {
     let command = ffmpeg().input(stitchedVideoPath).input(req.voicePath);
 
-    const hasBgm = req.bgmPath && fs.existsSync(req.bgmPath);
+    const hasBgm = Boolean(req.bgmPath && req.bgmPath.trim() !== '' && fs.existsSync(req.bgmPath));
     if (hasBgm) {
-      command = command.input(req.bgmPath!);
+      command = command.input(req.bgmPath!).inputOptions(['-stream_loop -1']);
     }
 
     const voiceVol = req.voiceVolume || 1.0;
     const bgmVol = req.bgmVolume || 0.15;
 
-    let complexFilter = `[0:v]subtitles=filename='${normalizedAssPath}',format=yuv420p[outv];`;
+    let complexFilter = `[0:v]subtitles=filename='${normalizedAssPath}':fontsdir='${fontsDir}',format=yuv420p[outv];`;
 
     if (hasBgm) {
-      complexFilter += `[1:a]volume=${voiceVol}[voice];[2:a]volume=${bgmVol},aloop=loop=-1:size=2e+09[bgm];[voice][bgm]amix=inputs=2:duration=first[outa]`;
+      complexFilter += `[1:a]volume=${voiceVol}[voice];[2:a]volume=${bgmVol}[bgm];[voice][bgm]amix=inputs=2:duration=first:dropout_transition=0:normalize=0[outa]`;
     } else {
       complexFilter += `[1:a]volume=${voiceVol}[outa]`;
     }

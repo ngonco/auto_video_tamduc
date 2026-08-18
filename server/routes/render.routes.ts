@@ -1,6 +1,7 @@
 import { Router } from 'express';
-import { exec } from 'child_process';
+import { execFile } from 'child_process';
 import path from 'path';
+import fs from 'fs';
 import { v4 as uuidv4 } from 'uuid';
 import { db } from '../db.js';
 import { renderFinalVideo, RenderRequest } from '../services/render-service.js';
@@ -43,8 +44,8 @@ renderRouter.post('/start', async (req, res) => {
 
     renderFinalVideo(renderReq, (percent, message) => {
       activeJobs[jobId] = {
-        status: percent >= 100 ? 'completed' : 'rendering',
-        percent,
+        status: 'rendering',
+        percent: Math.min(99, Math.round(percent)),
         message,
       };
     })
@@ -57,10 +58,14 @@ renderRouter.post('/start', async (req, res) => {
         };
 
         // Lưu vào DB
-        db.prepare(`
-          INSERT INTO generated_videos (id, project_name, voice_path, output_path, status)
-          VALUES (?, ?, ?, ?, 'completed')
-        `).run(jobId, projectName, voicePath, outputPath);
+        try {
+          db.prepare(`
+            INSERT INTO generated_videos (id, project_name, voice_path, output_path, status)
+            VALUES (?, ?, ?, ?, 'completed')
+          `).run(jobId, projectName, voicePath, outputPath);
+        } catch (dbErr) {
+          console.warn('[RenderRouter] Error saving to db:', dbErr);
+        }
       })
       .catch((err) => {
         console.error('[RenderRouter] Render failed:', err);
@@ -85,14 +90,86 @@ renderRouter.get('/status/:jobId', (req, res) => {
   res.json({ success: true, data: job });
 });
 
-// Mở thư mục chứa video xuất ra trên Windows Explorer
+// Mở thư mục chứa video xuất ra trên Windows Explorer (và highlight file video vừa xuất)
 renderRouter.post('/open-folder', (req, res) => {
   try {
     const { filePath } = req.body;
-    const target = filePath ? path.dirname(filePath) : (process.env.EXPORT_DIR || path.resolve(process.cwd(), 'exports'));
-    exec(`explorer.exe "${target}"`);
-    res.json({ success: true });
+    const defaultExportDir = process.env.EXPORT_DIR || path.resolve(process.cwd(), 'exports');
+
+    let targetPath = defaultExportDir;
+    if (filePath && typeof filePath === 'string' && filePath.trim() !== '') {
+      if (fs.existsSync(filePath)) {
+        targetPath = filePath;
+      } else {
+        const dir = path.dirname(filePath);
+        if (fs.existsSync(dir)) {
+          targetPath = dir;
+        }
+      }
+    }
+
+    if (!fs.existsSync(targetPath)) {
+      fs.mkdirSync(targetPath, { recursive: true });
+    }
+
+    const resolved = path.resolve(targetPath);
+    const isFile = fs.existsSync(resolved) && !fs.statSync(resolved).isDirectory();
+
+    if (isFile) {
+      // Dùng PowerShell mở Explorer và chọn trực tiếp file (select file)
+      const psCommand = `Start-Process explorer.exe -ArgumentList '/select,\`"${resolved.replace(/`/g, '``').replace(/"/g, '`"')}\`"'`;
+      execFile('powershell.exe', ['-NoProfile', '-Command', psCommand], (err) => {
+        if (err) console.warn('[RenderRouter] Note on opening explorer select:', err.message);
+      });
+    } else {
+      // Mở thư mục (open folder)
+      const psCommand = `Start-Process explorer.exe -ArgumentList '\`"${resolved.replace(/`/g, '``').replace(/"/g, '`"')}\`"'`;
+      execFile('powershell.exe', ['-NoProfile', '-Command', psCommand], (err) => {
+        if (err) console.warn('[RenderRouter] Note on opening explorer folder:', err.message);
+      });
+    }
+
+    res.json({ success: true, message: 'Đã gửi lệnh mở thư mục Explorer', path: resolved });
   } catch (err: any) {
+    console.error('[RenderRouter] Error opening folder:', err);
     res.status(500).json({ success: false, error: err.message });
   }
 });
+
+// Mở video bằng trình xem mặc định của Windows
+renderRouter.post('/open-video', (req, res) => {
+  try {
+    const { filePath } = req.body;
+    let targetFile = filePath;
+
+    if (!targetFile || !fs.existsSync(targetFile)) {
+      const defaultExportDir = process.env.EXPORT_DIR || path.resolve(process.cwd(), 'exports');
+      if (fs.existsSync(defaultExportDir)) {
+        const files = fs.readdirSync(defaultExportDir)
+          .filter((f) => f.endsWith('.mp4') || f.endsWith('.mkv') || f.endsWith('.mov'))
+          .map((f) => ({ name: f, time: fs.statSync(path.join(defaultExportDir, f)).mtimeMs }))
+          .sort((a, b) => b.time - a.time);
+        if (files.length > 0) {
+          targetFile = path.join(defaultExportDir, files[0].name);
+        }
+      }
+    }
+
+    if (!targetFile || !fs.existsSync(targetFile)) {
+      return res.status(404).json({ success: false, error: 'Không tìm thấy file video xuất ra' });
+    }
+
+    const resolvedFile = path.resolve(targetFile);
+    const psCommand = `Start-Process -FilePath \`"${resolvedFile.replace(/`/g, '``').replace(/"/g, '`"')}\`"`;
+    execFile('powershell.exe', ['-NoProfile', '-Command', psCommand], (err) => {
+      if (err) console.warn('[RenderRouter] Note on opening video with default player:', err.message);
+    });
+
+    res.json({ success: true, message: 'Đã gửi lệnh phát video', filePath: resolvedFile });
+  } catch (err: any) {
+    console.error('[RenderRouter] Error playing video:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+
