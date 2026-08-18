@@ -39,7 +39,7 @@
   ├── 1. Thư Viện Source     (src/components/LibraryView/)      : Grid danh sách công trình, trạng thái nhúng
   ├── 2. Tạo Video Nhanh     (src/components/GeneratorView/)    : Wizard nạp Voice -> STT -> Sửa phụ đề -> Sinh timeline
   ├── 3. Trình Dựng Timeline (src/components/EditorView/)       : Preview 9:16 Remotion Player, Multi-track clips/subs
-  └── 4. Cài Đặt Hệ Thống    (src/components/SettingsView/)     : Quản lý API Key, Base URL, thư mục Source & Exports
+  └── 4. Cài Đặt Hệ Thống    (src/components/SettingsView/)     : Quản lý API Key, Base URL, thư mục Source & Exports, Outro
 -------------------------------------------------------------------------------------------------------
 [ TẦNG ENGINE & BACKEND (Node.js Express + SQLite + FFmpeg + OpenAI SDK) ]
   ├── Watcher Module         (server/watcher.ts)                : Chokidar theo dõi Folder Source (Video + Ảnh)
@@ -49,6 +49,12 @@
   ├── Subtitle Sync Engine   (server/services/subtitle-fixer.ts): Phân đoạn phụ đề 9:16 bảo toàn 100% từ ngữ & mốc thời gian Voice, chuẩn hóa danh xưng Phật học & ngữ pháp tiếng Việt
   ├── Storyline Engine       (server/services/storyline-engine.ts): Phân bổ clip/ảnh 4 giai đoạn theo thời lượng Voice
   └── Render Service         (server/services/render-service.ts): Render MP4 1080x1920 (Cross Dissolve + Image Zoom + ASS Karaoke + Outro)
+-------------------------------------------------------------------------------------------------------
+[ TẦNG TIỆN ÍCH WINDOWS & NATIVE DIALOGS (PowerShell STA) ]
+  ├── server/utils/picker.ps1         : Hộp thoại chọn Thư Mục Windows (Folder Browser Dialog)
+  ├── server/utils/audio-picker.ps1   : Hộp thoại chọn File Âm Thanh Voice (.mp3, .wav, .m4a...)
+  ├── server/utils/media-picker.ps1   : Hộp thoại chọn File Video hoặc Ảnh (.mp4, .mov, .jpg, .png...)
+  └── server/utils/video-picker.ps1   : Hộp thoại chọn File Video Outro (.mp4, .mov, .mkv, .avi, .webm)
 -------------------------------------------------------------------------------------------------------
 [ TẦNG LƯU TRỮ CỤC BỘ (Local Storage) ]
   ├── database/library.db    : SQLite Single-file (Bảng projects, video_sources, generated_videos, settings, voices)
@@ -138,11 +144,31 @@ Tổng thời lượng Video = Thời lượng Voice chính xác (T giây từ f
        - **Tải Trực Tiếp (.MP4)**: Tải video trực tiếp về máy qua trình duyệt.
        - **Khung Điều Khiển Ghi Nhớ**: Card thông tin video vừa xuất hiển thị thường trực trên thanh công cụ và bảng điều khiển Timeline Editor để xem lại hoặc mở thư mục bất kỳ lúc nào.
   15. Cơ Chế Video Outro Cố Định & Bảo Toàn Âm Thanh Gốc (Unmuted Outro Engine):
-       - **Cấu hình & Tự động gắn kết**: File video Outro mặc định (`defaultOutroPath`) được lưu trong `config.json` qua trang Cài Đặt Hệ Thống. Khi mở Timeline Editor, khối Outro tự động gắn vào cuối Video track sau clip cuối cùng.
+       - **Cấu hình & Tự động gắn kết**: File video Outro mặc định (`defaultOutroPath`) được lưu trong `config.json` (hỗ trợ cả root và `defaults`). Khi mở Timeline Editor, khối Outro tự động gắn vào cuối Video track sau clip cuối cùng.
        - **Bảo toàn 100% âm thanh gốc (Unmuted)**: Khác với video clip công trình bị mute để nhường chỗ cho Voice, clip Outro có cờ `isOutro: true` được thiết lập `volume={1.0}` và `muted={false}` trong Remotion Player cũng như trích xuất nguyên vẹn audio stream khi Render FFmpeg.
        - **Audio Ducking & BGM Fade-out**: Nhạc thiền BGM tự động Fade-out (nhỏ dần rồi tắt trong 1.0s cuối của phần Voice) trước khi chuyển sang Outro, đảm bảo âm thanh thương hiệu của Outro vang lên trong trẻo và rõ ràng nhất.
        - **Giới hạn Phụ đề Karaoke**: Phụ đề ASS Karaoke chỉ hiển thị trong dải thời gian `0 -> exactVoiceDuration`, tuyệt đối không đè chữ lên Outro.
        - **FFmpeg Stitching Pipeline**: Chuẩn hóa Outro 1080x1920 30fps (`norm_outro.mp4`), nối video thân + outro bằng `xfade` (0.5s) và nối audio bằng `acrossfade` (0.5s) hoặc `concat` tạo video MP4 hoàn chỉnh với thời lượng `exactVoiceDuration + exactOutroDuration - xfadeDuration`.
+  16. Chuẩn Hóa Cơ Chế Mở Hộp Thoại File/Folder Windows (Native PowerShell Pickers Architecture):
+       - **Quy tắc vàng khi gọi PowerShell UI**:
+         + Bắt buộc có cờ `-STA` (Single-Threaded Apartment) và `-NoProfile -ExecutionPolicy Bypass` khi gọi `powershell.exe`.
+         + Bắt buộc khởi tạo Form ẩn với:
+           ```powershell
+           $form = New-Object System.Windows.Forms.Form
+           $form.TopMost = $true
+           $form.ShowInTaskbar = $true
+           $form.StartPosition = [System.Windows.Forms.FormStartPosition]::CenterScreen
+           $form.WindowState = [System.Windows.Forms.FormWindowState]::Normal
+           $result = $dlg.ShowDialog($form)
+           ```
+           để đảm bảo hộp thoại OpenFileDialog luôn nổi lên trên cùng màn hình (TopMost), không bị mở ngầm/ẩn phía sau trình duyệt hoặc IDE gây cảm giác bấm nút không phản hồi.
+         + Bắt buộc xử lý `InitialDir` thông minh: Nếu tham số truyền vào là đường dẫn file thì dùng `[System.IO.Path]::GetDirectoryName($InitialDir)` để mở ngay lập tức tại thư mục đó.
+         + Bắt buộc thiết lập mã hóa đầu ra UTF-8:
+           ```powershell
+           [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+           $OutputEncoding = [System.Text.Encoding]::UTF8
+           ```
+           để bảo toàn 100% đường dẫn chứa ký tự tiếng Việt có dấu và khoảng trắng.
 ```
 
 ---
@@ -218,33 +244,33 @@ CREATE TABLE voices (
 
 ## 6. DANH MỤC API ROUTES (BACKEND ENDPOINTS)
 
-| Method | Endpoint | Mô Tả |
-| :--- | :--- | :--- |
-| `GET` | `/api/library/projects` | Lấy danh sách tất cả các công trình và tổng số video |
-| `GET` | `/api/library/projects/:id/videos` | Lấy danh sách clip chi tiết của 1 công trình |
-| `POST` | `/api/library/pick-and-import` | Mở hộp thoại chọn thư mục công trình Windows & tự động phân tích AI |
-| `POST` | `/api/library/import-path` | Nhập thư mục công trình từ đường dẫn & tự động phân tích AI |
-| `POST` | `/api/library/projects/:id/scan` | Kích hoạt quét và nhúng AI chạy nền cho 1 công trình (xử lý song song 4 luồng) |
-| `GET` | `/api/library/projects/:id/scan-status` | Lấy tiến độ % quét và phân tích AI thời gian thực của công trình |
-| `DELETE`| `/api/library/projects/:id` | Xóa 1 công trình và các video liên quan khỏi thư viện |
-| `GET` | `/api/generator/voices` | Lấy danh sách voice đã nạp và lưu trong lịch sử SQLite |
-| `POST` | `/api/generator/pick-voice` | Mở hộp thoại Windows chọn file Voice âm thanh (.mp3, .wav, .m4a) |
-| `POST` | `/api/generator/pick-media` | Mở hộp thoại Windows chọn file Video hoặc Ảnh (.mp4, .mov, .jpg, .png...) thay thế clip |
-| `DELETE`| `/api/generator/voices/:id` | Xóa voice khỏi danh sách lịch sử |
-| `POST` | `/api/generator/upload-voice` | Tải lên file Voice (.mp3, .wav, .m4a) qua web |
-| `POST` | `/api/generator/process-voice` | Nhận diện STT Whisper + Gemini sửa phụ đề Phật học & tự động lưu lịch sử |
-| `POST` | `/api/generator/assemble-storyline`| Tự động phân bổ clip 4 giai đoạn khớp thời lượng Voice (kèm cấu hình Outro) |
-| `GET` | `/api/generator/bgm-list` | Lấy danh sách nhạc thiền BGM |
-| `POST` | `/api/render/start` | Bắt đầu Render video MP4 1080x1920 qua FFmpeg (kèm Outro unmuted audio & BGM fade-out) |
-| `GET` | `/api/render/status/:jobId` | Lấy tiến độ % render (0 - 100%) và đường dẫn file output chính xác |
-| `POST` | `/api/render/open-folder` | Mở thư mục chứa video trên Windows Explorer (và tự động highlight chọn file video vừa xuất) |
-| `POST` | `/api/render/open-video` | Mở phát video trực tiếp bằng ứng dụng xem video mặc định của Windows |
-| `GET` | `/api/settings` | Đọc cấu hình 3 API Key .env / config.json / defaultOutroPath |
-| `POST` | `/api/settings` | Lưu cấu hình 3 API Key .env / config.json / defaultOutroPath |
-| `POST` | `/api/settings/browse-folder` | Mở hộp thoại FolderBrowserDialog của Windows |
-| `POST` | `/api/settings/browse-video` | Mở hộp thoại OpenFileDialog của Windows chọn video Outro (.mp4, .mov, .mkv...) |
-| `GET` | `/media/stream?path=...` | Stream video & audio hỗ trợ HTTP Range header cho Preview Player |
-| `GET` | `/api/health` | Kiểm tra trạng thái hoạt động backend |
+| Method | Endpoint | Tham Số (Body/Query) | Mô Tả |
+| :--- | :--- | :--- | :--- |
+| `GET` | `/api/library/projects` | - | Lấy danh sách tất cả các công trình và tổng số video |
+| `GET` | `/api/library/projects/:id/videos` | - | Lấy danh sách clip chi tiết của 1 công trình |
+| `POST` | `/api/library/pick-and-import` | `{ initialPath?: string }` | Mở hộp thoại chọn thư mục công trình Windows & tự động phân tích AI |
+| `POST` | `/api/library/import-path` | `{ folderPath: string }` | Nhập thư mục công trình từ đường dẫn & tự động phân tích AI |
+| `POST` | `/api/library/projects/:id/scan` | - | Kích hoạt quét và nhúng AI chạy nền cho 1 công trình (xử lý song song 4 luồng) |
+| `GET` | `/api/library/projects/:id/scan-status` | - | Lấy tiến độ % quét và phân tích AI thời gian thực của công trình |
+| `DELETE`| `/api/library/projects/:id` | - | Xóa 1 công trình và các video liên quan khỏi thư viện |
+| `GET` | `/api/generator/voices` | - | Lấy danh sách voice đã nạp và lưu trong lịch sử SQLite |
+| `POST` | `/api/generator/pick-voice` | `{ initialDir?: string }` | Mở hộp thoại Windows chọn file Voice âm thanh (.mp3, .wav, .m4a) qua `audio-picker.ps1` |
+| `POST` | `/api/generator/pick-media` | `{ initialDir?: string }` | Mở hộp thoại Windows chọn file Video hoặc Ảnh (.mp4, .mov, .jpg, .png...) thay thế clip qua `media-picker.ps1` |
+| `DELETE`| `/api/generator/voices/:id` | - | Xóa voice khỏi danh sách lịch sử |
+| `POST` | `/api/generator/upload-voice` | FormData (`file`) | Tải lên file Voice (.mp3, .wav, .m4a) qua web |
+| `POST` | `/api/generator/process-voice` | `{ filePath, duration }` | Nhận diện STT Whisper + Gemini sửa phụ đề Phật học & tự động lưu lịch sử |
+| `POST` | `/api/generator/assemble-storyline`| `{ voiceDuration, projectId, outro? }` | Tự động phân bổ clip 4 giai đoạn khớp thời lượng Voice (kèm cấu hình Outro) |
+| `GET` | `/api/generator/bgm-list` | - | Lấy danh sách nhạc thiền BGM |
+| `POST` | `/api/render/start` | `{ videoId, projectName, voicePath, clips, subtitles, outroPath, outroEnabled, outroDuration }` | Bắt đầu Render video MP4 1080x1920 qua FFmpeg (kèm Outro unmuted audio & BGM fade-out) |
+| `GET` | `/api/render/status/:jobId` | - | Lấy tiến độ % render (0 - 100%) và đường dẫn file output chính xác |
+| `POST` | `/api/render/open-folder` | `{ filePath: string }` | Mở thư mục chứa video trên Windows Explorer (và tự động highlight chọn file video vừa xuất) |
+| `POST` | `/api/render/open-video` | `{ filePath: string }` | Mở phát video trực tiếp bằng ứng dụng xem video mặc định của Windows |
+| `GET` | `/api/settings` | - | Đọc cấu hình 3 API Key .env / config.json / defaultOutroPath |
+| `POST` | `/api/settings` | `{ sttApiKey, subtitleApiKey, embeddingApiKey, baseUrl, rootSourceDir, exportDir, config }` | Lưu cấu hình 3 API Key .env / config.json / defaultOutroPath |
+| `POST` | `/api/settings/browse-folder` | `{ initialPath?: string }` | Mở hộp thoại FolderBrowserDialog của Windows qua `picker.ps1` |
+| `POST` | `/api/settings/browse-video` | `{ initialPath?: string }` | Mở hộp thoại OpenFileDialog của Windows chọn video Outro (.mp4, .mov, .mkv...) qua `video-picker.ps1` |
+| `GET` | `/media/stream?path=...` | `path` | Stream video & audio hỗ trợ HTTP Range header cho Preview Player |
+| `GET` | `/api/health` | - | Kiểm tra trạng thái hoạt động backend |
 
 ---
 
@@ -258,6 +284,8 @@ Auto_Video_TamDuc/
 ├── vite.config.ts              # Proxy port 5173 -> backend 3001
 ├── tsconfig.json
 ├── Auto_Video_TamDuc.exe       # Launcher khởi động 1-click gắn Taskbar
+├── backup.bat                  # Script nhấp đúp 1-Click sao lưu lên GitHub
+├── backup.ps1                  # PowerShell script thực hiện commit và push Git
 ├── system_map.md               # File này (Bản đồ hệ thống)
 │
 ├── server/                     # Backend Express & Workers
