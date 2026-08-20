@@ -157,11 +157,65 @@ const CLAUSE_STARTER_WORDS = new Set<string>([
  * Các từ không nên đứng trơ trọi ở cuối dòng nếu dòng đã đủ dài
  */
 const HANGING_END_WORDS = new Set<string>([
-  'thì', 'là', 'và', 'hoặc', 'của', 'để', 'mà', 'với', 'trong', 'ở', 'từ', 'có', 'cho'
+  'thì', 'là', 'và', 'hoặc', 'của', 'để', 'mà', 'với', 'trong', 'ở', 'từ', 'có', 'cho',
+  'ra', 'vào', 'bị', 'được', 'do', 'bởi', 'vì', 'lại', 'đã', 'đang', 'sẽ', 'nhưng', 'cái'
+]);
+
+/**
+ * Danh sách Từ ghép & Cụm từ ngữ nghĩa tiếng Việt 2 từ không được phép ngắt ở giữa
+ */
+const VIETNAMESE_COMPOUND_WORDS_2 = new Set<string>([
+  // Thiện nguyện, đạo lý, hành động, đời sống
+  'bố thí', 'làm phước', 'lượm rác', 'quần áo', 'cơm ăn', 'bữa đó', 'ngoài đường', 'đi ra', 'đi vào',
+  'bắt đầu', 'mọi điều', 'trở thành', 'siêng làm', 'chịu khó', 'có tiền', 'có của', 'miếng cơm', 'manh áo',
+  'nói có', 'nói không', 'trích miếng', 'mặc ngoài', 'bảo vệ', 'che chở', 'giúp đỡ', 'sẻ chia', 'cho đi',
+  'nhận lại', 'hy vọng', 'tin tưởng', 'thương yêu', 'cuộc sống', 'cuộc đời', 'hiện tại', 'quá khứ', 'tương lai',
+  'ngày mai', 'hôm nay', 'hôm qua', 'vẫn là', 'vẫn làm', 'được chứ', 'đừng có', 'cho có', 'cái đã', 'bằng cái',
+  'làm sao', 'vì sao', 'tại sao', 'như vậy', 'vì vậy', 'cho nên', 'tuy nhiên', 'thật sự', 'thực sự', 'rõ ràng',
+  'dễ dàng', 'khó khăn', 'gian khó', 'vất vả', 'nhọc nhằn', 'chia sẻ', 'phụng dưỡng', 'hiếu thảo', 'biết ơn',
+  'cứu giúp', 'cứu trợ', 'từ thiện', 'phóng sinh', 'làm lành', 'lánh dữ', 'tu tâm', 'dưỡng tính',
+
+  // Không gian thờ, Phật học, Tâm linh, Kiến trúc
+  'bàn thờ', 'phòng thờ', 'không gian', 'trang nghiêm', 'thanh tịnh', 'tâm linh', 'cội nguồn', 'hoa sen',
+  'lư hương', 'mâm bồng', 'tượng phật', 'đèn dầu', 'hào quang', 'chắp tay', 'lễ phật', 'cúng dường', 'phước báu',
+  'phước đức', 'công đức', 'gia hộ', 'phụng sự', 'nhân quả', 'bồ tát', 'thế tôn', 'như lai', 'thích ca',
+  'a di', 'di đà', 'quán âm', 'địa tạng', 'niết bàn', 'tịnh độ', 'tu tập', 'giác ngộ', 'từ bi', 'trí tuệ',
+  'an lạc', 'hoan hỷ', 'tinh tấn', 'sám hối', 'quy y', 'duyên khởi', 'vô thường', 'luân hồi', 'giải thoát',
+  'thiện duyên', 'thiện nam', 'tín nữ', 'đạo tràng', 'thiền định', 'an trú', 'tĩnh lặng', 'bình an', 'hạnh phúc',
+  'ấm no', 'cứu khổ', 'cứu nạn', 'cửu huyền', 'thất tổ', 'tổ tiên', 'ông bà', 'cha mẹ', 'con cháu', 'gia đình',
+  'dân tộc', 'tiềm tàng', 'bủa vây', 'chở hồn', 'nội thất', 'thiết kế', 'thi công', 'hoàn thiện', 'gỗ quý',
+  'sơn son', 'thếp vàng', 'chạm khắc', 'tinh xảo', 'hoành phi', 'câu đối', 'cửa võng', 'vách cnc', 'trúc chỉ',
+  'án gian', 'sập thờ', 'tam cấp', 'nhị cấp', 'ngai thờ', 'khám thờ', 'bài vị', 'chân đèn', 'đỉnh đồng',
+  'bát hương', 'ống hương', 'lọ hoa', 'đài thờ', 'ngai chén', 'bình hoa', 'mâm quả', 'chuông đồng', 'mõ gỗ',
+  'kinh kệ', 'hương trầm', 'khói hương', 'thành kính', 'tri ân', 'hướng về', 'tâm hồn', 'sâu sắc', 'linh thiêng'
+]);
+
+/**
+ * Danh sách Cụm từ 3 từ không được ngắt rời
+ */
+const VIETNAMESE_COMPOUND_WORDS_3 = new Set<string>([
+  'không gian thờ', 'bàn thờ phật', 'bàn thờ gia tiên', 'cúng dường tam bảo', 'phát tâm bồ đề',
+  'hồi hướng công đức', 'cửu huyền thất tổ', 'quốc thái dân an', 'tâm an vạn sự', 'gieo nhân gặt quả',
+  'tích đức hành thiện', 'đi ra lượm rác', 'trích miếng cơm ra', 'bắt đầu mọi điều', 'có còn quần áo',
+  'trở thành không làm', 'phải siêng làm phước', 'chịu khó làm phước', 'vẫn là làm phước', 'vẫn làm phước được',
+  'để cho có phước', 'chứ đừng có nói', 'a di đà', 'nam mô a', 'mẹ quán âm', 'quán thế âm'
 ]);
 
 function cleanWordForCompare(w: string): string {
   return (w || '').trim().toLowerCase().replace(/[,.;:!?…""''“”‘’()\[\]]+$/, '').replace(/^[,.;:!?…""''“”‘’()\[\]]+/, '');
+}
+
+export function isNonBreakablePair(w1: string, w2: string): boolean {
+  const c1 = cleanWordForCompare(w1);
+  const c2 = cleanWordForCompare(w2);
+  return VIETNAMESE_COMPOUND_WORDS_2.has(`${c1} ${c2}`);
+}
+
+export function isNonBreakableTriplet(w1: string, w2: string, w3: string): boolean {
+  const c1 = cleanWordForCompare(w1);
+  const c2 = cleanWordForCompare(w2);
+  const c3 = cleanWordForCompare(w3);
+  return VIETNAMESE_COMPOUND_WORDS_3.has(`${c1} ${c2} ${c3}`);
 }
 
 function formatWord(rawWord: string, isStartOfSentence: boolean, isFirstWordInLine: boolean): string {
@@ -361,8 +415,9 @@ export function alignCorrectedWordsWithTimestamps(
  * Phân đoạn phụ đề 9:16 thông minh & bảo toàn 100% từ ngữ và mốc thời gian của Voice
  * Đảm bảo:
  * 1. Không bị mất từ, không bị rút ngắn, không kết thúc trước Voice
- * 2. Ngắt dòng 3-6 từ tối ưu cho khung hình dọc 9:16
- * 3. Đồng bộ chuẩn xác tuyệt đối từng từ (Karaoke Word Timestamps)
+ * 2. Bảo toàn tuyệt đối các từ ghép & cụm từ có nghĩa (2-3 từ), không cắt nửa chừng
+ * 3. Độ dài dòng linh hoạt 2-5 từ (tối đa 6 từ nếu giữ từ ghép) tối ưu cho khung hình dọc 9:16
+ * 4. Đồng bộ chuẩn xác tuyệt đối từng từ (Karaoke Word Timestamps)
  */
 export function segmentAndPolishSubtitles(rawWords: KaraokeWord[]): SubtitleLine[] {
   if (!rawWords || rawWords.length === 0) {
@@ -383,71 +438,123 @@ export function segmentAndPolishSubtitles(rawWords: KaraokeWord[]): SubtitleLine
     }
 
     const nextWordObj = rawWords[i + 1];
-    const nextWordClean = nextWordObj.word.trim().toLowerCase().replace(/[,.;:!?]+$/, '');
+    const nextNextWordObj = i + 2 < rawWords.length ? rawWords[i + 2] : null;
+    const prevWordObj = currentChunk.length >= 2 ? currentChunk[currentChunk.length - 2] : null;
+
     const pauseGap = nextWordObj.start - wordObj.end;
     const rawWordText = wordObj.word.trim();
-    const cleanWordText = rawWordText.toLowerCase().replace(/[,.;:!?]+$/, '');
+    const cleanWordText = cleanWordForCompare(rawWordText);
+    const nextWordClean = cleanWordForCompare(nextWordObj.word);
+
     const hasComma = /[,;:]$/.test(rawWordText);
     const hasSentenceEnd = /[.!?]$/.test(rawWordText);
 
-    // Tiêu chí 1: Dấu kết thúc câu (. ! ?) -> ngắt dòng nếu dòng >= 2 từ
+    // Kiểm tra ràng buộc từ ghép (Compound Word Boundaries)
+    const isPairWithNext = isNonBreakablePair(rawWordText, nextWordObj.word);
+    const isTripletWithNext = nextNextWordObj ? isNonBreakableTriplet(rawWordText, nextWordObj.word, nextNextWordObj.word) : false;
+    const isTripletFromPrev = prevWordObj ? isNonBreakableTriplet(prevWordObj.word, rawWordText, nextWordObj.word) : false;
+    const isBoundToNext = isPairWithNext || isTripletWithNext || isTripletFromPrev;
+
+    const isHangingEnd = HANGING_END_WORDS.has(cleanWordText);
+
+    // Tiêu chí 1: Khoảng lặng âm thanh cực lớn (pauseGap >= 0.8s) -> ngắt câu dứt khoát
+    if (pauseGap >= 0.8) {
+      rawChunks.push(currentChunk);
+      currentChunk = [];
+      continue;
+    }
+
+    // Nếu đang bị dính từ ghép với từ tiếp theo -> KHÔNG NGẮT TRỪ KHI dòng đã quá dài (>= 6 từ)
+    if (isBoundToNext && currentChunk.length < 6) {
+      continue;
+    }
+
+    // Nếu kết thúc bằng từ treo (hư từ/liên từ) -> KHÔNG NGẮT TRỪ KHI dòng đã đạt 5 từ
+    if (isHangingEnd && currentChunk.length < 5) {
+      continue;
+    }
+
+    // Tiêu chí 2: Dấu kết thúc câu (. ! ?) -> ngắt dòng nếu dòng >= 2 từ
     if (hasSentenceEnd && currentChunk.length >= 2) {
       rawChunks.push(currentChunk);
       currentChunk = [];
       continue;
     }
 
-    // Tiêu chí 2: Khoảng lặng âm thanh rõ rệt (pauseGap >= 0.30s) -> ngắt dòng nếu dòng >= 2 từ
-    if (pauseGap >= 0.30 && currentChunk.length >= 2) {
+    // Tiêu chí 3: Khoảng lặng âm thanh rõ rệt (pauseGap >= 0.45s) -> ngắt nếu dòng >= 3 từ
+    if (pauseGap >= 0.45 && currentChunk.length >= 3) {
       rawChunks.push(currentChunk);
       currentChunk = [];
       continue;
     }
 
-    // Tiêu chí 3: Dấu phẩy -> ngắt dòng nếu đã có ít nhất 3 từ
+    // Tiêu chí 4: Dấu phẩy -> ngắt nếu đã có ít nhất 3 từ
     if (hasComma && currentChunk.length >= 3) {
       rawChunks.push(currentChunk);
       currentChunk = [];
       continue;
     }
 
-    // Tiêu chí 4: Từ kế tiếp là từ mở đầu vế câu mới (thì, nhưng, để, và...) và dòng hiện tại đã đủ 3-4 từ
-    if (currentChunk.length >= 3 && CLAUSE_STARTER_WORDS.has(nextWordClean) && !HANGING_END_WORDS.has(cleanWordText)) {
+    // Tiêu chí 5: Từ kế tiếp là từ mở đầu vế câu mới hoặc cụm hành động mới và dòng đã đủ 3-4 từ
+    const isNextActionOrClause = CLAUSE_STARTER_WORDS.has(nextWordClean) || ['ra', 'vào', 'đi', 'đến', 'lấy', 'để', 'cho', 'với'].includes(nextWordClean);
+    if (currentChunk.length >= 3 && isNextActionOrClause && !isHangingEnd) {
       rawChunks.push(currentChunk);
       currentChunk = [];
       continue;
     }
 
-    // Tiêu chí 5: Dòng đã đạt 5 từ và không kết thúc bằng từ treo
-    if (currentChunk.length >= 5 && !HANGING_END_WORDS.has(cleanWordText)) {
+    // Tiêu chí 6: Dòng đã đạt 4 từ và không bị dính từ treo/từ ghép
+    if (currentChunk.length >= 4 && !isHangingEnd) {
       rawChunks.push(currentChunk);
       currentChunk = [];
       continue;
     }
 
-    // Tiêu chí 6: Giới hạn tối đa 6 từ để không bị tràn dòng 9:16
-    if (currentChunk.length >= 6) {
+    // Tiêu chí 7: Giới hạn tối đa 5 từ (trừ khi đang giữ từ ghép lên 6 từ)
+    if (currentChunk.length >= 5) {
       rawChunks.push(currentChunk);
       currentChunk = [];
       continue;
     }
   }
 
-  // Xử lý dòng cuối cùng nếu bị quá ngắn (1-2 từ) -> gộp vào dòng trước để tránh cụt câu
-  if (rawChunks.length > 1) {
-    const lastChunk = rawChunks[rawChunks.length - 1];
-    if (lastChunk.length <= 2) {
-      const prevChunk = rawChunks[rawChunks.length - 2];
-      if (prevChunk.length + lastChunk.length <= 7) {
-        rawChunks[rawChunks.length - 2] = [...prevChunk, ...lastChunk];
-        rawChunks.pop();
-      }
+  // Hậu xử lý: Quét và gộp các chunk quá ngắn (1 từ hoặc 2 từ < 0.8s) vào dòng kế cận nếu gap < 0.8s
+  const mergedChunks: KaraokeWord[][] = [];
+  for (let i = 0; i < rawChunks.length; i++) {
+    const chunk = rawChunks[i];
+    if (mergedChunks.length === 0) {
+      mergedChunks.push(chunk);
+      continue;
+    }
+
+    const prevChunk = mergedChunks[mergedChunks.length - 1];
+    const gap = chunk[0].start - prevChunk[prevChunk.length - 1].end;
+    const chunkDur = chunk[chunk.length - 1].end - chunk[0].start;
+    const prevDur = prevChunk[prevChunk.length - 1].end - prevChunk[0].start;
+
+    const isCurrentSingleWord = chunk.length === 1;
+    const isCurrentTooShort = isCurrentSingleWord || (chunk.length === 2 && chunkDur < 0.8);
+    const isPrevTooShort = prevChunk.length === 1 || (prevChunk.length === 2 && prevDur < 0.8);
+
+    // Nếu chunk hiện tại chỉ có 1 từ -> ưu tiên gộp vào prev nếu tổng <= 7 từ
+    if (isCurrentSingleWord && gap < 0.8 && prevChunk.length + chunk.length <= 7) {
+      mergedChunks[mergedChunks.length - 1] = [...prevChunk, ...chunk];
+    }
+    // Nếu chunk hiện tại quá ngắn (2 từ) và khoảng cách nhỏ -> gộp vào prev nếu tổng <= 6 từ
+    else if (isCurrentTooShort && gap < 0.8 && prevChunk.length + chunk.length <= 6) {
+      mergedChunks[mergedChunks.length - 1] = [...prevChunk, ...chunk];
+    }
+    // Nếu prev quá ngắn và gap nhỏ -> gộp prev vào current nếu tổng <= 6 từ
+    else if (isPrevTooShort && gap < 0.8 && prevChunk.length + chunk.length <= 6) {
+      mergedChunks[mergedChunks.length - 1] = [...prevChunk, ...chunk];
+    } else {
+      mergedChunks.push(chunk);
     }
   }
 
   // Chuẩn hóa ngữ pháp & chính tả cho từng dòng
   let isStartOfSentence = true;
-  const lines: SubtitleLine[] = rawChunks.map((chunk, lineIdx) => {
+  const lines: SubtitleLine[] = mergedChunks.map((chunk, lineIdx) => {
     const firstWordClean = chunk[0].word.replace(/[,.;:!?]+$/, '').toLowerCase();
     let lineStartsNewSentence = isStartOfSentence;
     if (lineIdx > 0 && CONTINUATION_WORDS.has(firstWordClean)) {

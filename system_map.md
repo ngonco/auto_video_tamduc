@@ -115,8 +115,13 @@ Tổng thời lượng Video = Thời lượng Voice chính xác (T giây từ f
        + Truyền prompt tiếng Việt chuẩn mực từ vựng ngữ cảnh tự nhiên để định hướng Whisper.
        + Bộ lọc `filterHallucinatedWords`: Ánh xạ phạm vi ký tự và quét sạch các mẫu câu ảo giác điển hình của Whisper (như *Hãy subscribe cho kênh, Ghiền mì gõ, để không bỏ lỡ video, like và share, bấm chuông, cảm ơn đã theo dõi...*) và các từ kéo dài bất thường do khoảng lặng.
      - **Tầng 2 (Gemini Contextual AI Spell-Check & Hallucination Purge)**: Gửi văn bản STT qua `ts/gemini-3.1-flash-lite` với system prompt chuyên sâu về tiếng Việt, phân tích ngữ nghĩa toàn câu để vừa sửa các lỗi sai âm (như *tìm tàn* ➔ *tiềm tàng*, *mũa vây* ➔ *bủa vây*, *dâng tộc đừng* ➔ *dân tộc đứng*, *phải xuyên* ➔ *phải siêng*...) vừa phát hiện và loại bỏ triệt để các câu ảo giác lạc đề.
-     - **Tầng 3 (Word-Alignment & Time Interpolation Engine)**: Thuật toán so khớp chuỗi ánh xạ trực tiếp các từ đã sửa vào mảng `KaraokeWord[]` gốc, bảo toàn 100% mốc thời gian `start`, `end`. Khi 1 từ tách thành N từ hoặc N từ gộp thành 1 từ, hệ thống tự động nội suy thời lượng để không làm lệch nhịp Karaoke.
-     - **Tầng 4 (Bộ Công Cụ Sửa Phụ Đề Toàn Diện & Auto-Save Database)**:
+     - **Tầng 3 (Thuật toán Ngắt Phụ Đề Thông Minh & Bảo Toàn Từ Ghép - Smart Compound Word Segmentation)**:
+       + Tích hợp bộ từ điển phong phú gồm các từ ghép 2 từ (`VIETNAMESE_COMPOUND_WORDS_2`) và 3 từ (`VIETNAMESE_COMPOUND_WORDS_3`) bao quát đời sống, thiện nguyện, không gian thờ và Phật học (`bố thí, làm phước, lượm rác, quần áo, cơm ăn, bắt đầu, mọi điều, trở thành, siêng làm, bàn thờ, phòng thờ, trang nghiêm, thanh tịnh, tâm linh, cội nguồn...`).
+       + Hàm `isNonBreakablePair` & `isNonBreakableTriplet`: Tuyệt đối cấm ngắt dòng giữa 2 từ thuộc cùng một từ ghép.
+       + Quy tắc độ dài dòng 9:16 linh hoạt: 2 đến 5 từ (tối đa 6 từ nếu cần giữ trọn vẹn từ ghép), ngắt nhịp tự nhiên theo cụm chủ vị/hành động.
+       + Xử lý khoảng lặng & Hậu kiểm gộp dòng: Chỉ ngắt câu ngắn 1-2 từ khi `pauseGap >= 0.8s`; tự động gộp các từ đơn lẻ hoặc câu cộc vào dòng kế cận để không bao giờ có dòng cụt ngủn 1 từ.
+     - **Tầng 4 (Word-Alignment & Time Interpolation Engine)**: Thuật toán so khớp chuỗi ánh xạ trực tiếp các từ đã sửa vào mảng `KaraokeWord[]` gốc, bảo toàn 100% mốc thời gian `start`, `end`. Khi 1 từ tách thành N từ hoặc N từ gộp thành 1 từ, hệ thống tự động nội suy thời lượng để không làm lệch nhịp Karaoke.
+     - **Tầng 5 (Bộ Công Cụ Sửa Phụ Đề Toàn Diện & Auto-Save Database)**:
        + **Xem & Sửa Từng Dòng (Line-by-line Editor)**: Cho phép sửa nhanh text từng dòng (phím Enter/Esc), gộp dòng với dòng kế tiếp, hoặc xóa hẳn dòng thừa/ảo giác chỉ với 1 click.
        + **Sửa Toàn Bộ Văn Bản (Bulk Transcript Editor)**: Cho phép biên tập lại toàn bộ nội dung bài nói trong textarea lớn và nhấn "Áp Dụng & Tự Động Phân Dòng 9:16" (`realignAndSegmentFromCustomText`).
        + **Tự Động Lưu Tức Thì (Auto-Save)**: Mọi thao tác sửa/xóa/gộp/áp dụng đều tự động lưu ngay vào bảng `voices` trong SQLite (`/api/generator/update-subtitles`).
