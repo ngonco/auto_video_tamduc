@@ -55,6 +55,85 @@ const SPELLING_CORRECTIONS = new Map<string, string>([
 ]);
 
 /**
+ * Danh sách mẫu câu ảo giác (Hallucinations) phổ biến từ Whisper khi gặp khoảng lặng/nhạc đệm
+ */
+const HALLUCINATION_REGEXES: RegExp[] = [
+  /(hãy\s+)?(đăng\s*ký|subscribe|subcribe|sub|like|share|chia\s*sẻ)\s+(kênh|cho\s+kênh|ủng\s+hộ)/i,
+  /ghiền\s+mì\s+gõ/i,
+  /mì\s+gõ/i,
+  /(để\s+)?không\s+bỏ\s+lỡ(\s+những)?\s+(video|clip|tập|phần)/i,
+  /lỡ\s+những\s+video(\s+hấp\s+dẫn)?/i,
+  /video\s+hấp\s+dẫn/i,
+  /(đón\s+xem|theo\s+dõi|xem\s+tiếp)\s+(video|tập|kênh|nội\s+dung)/i,
+  /nhấn\s+(chuông|vào\s+chuông|nút\s+đăng\s+ký|theo\s+dõi)/i,
+  /chúc\s+các\s+bạn\s+(xem\s+video\s+vui\s+vẻ|có\s+những\s+giây\s+phút|thư\s+giãn)/i,
+  /cảm\s+ơn\s+các\s+bạn\s+đã\s+(theo\s+dõi|xem\s+video|ủng\s+hộ|lắng\s+nghe)/i,
+  /(hãy\s+)?like\s+và\s+(subscribe|đăng\s*ký|chia\s*sẻ)/i,
+  /hẹn\s+gặp\s+lại\s+các\s+bạn\s+trong\s+(những\s+)?video/i,
+  /sub\s+kênh/i,
+  /đăng\s+ký\s+kênh/i,
+];
+
+/**
+ * Lọc bỏ các từ/câu ảo giác (Lớp 1: Deterministic Pattern & Anomaly Filter)
+ */
+export function filterHallucinatedWords(words: KaraokeWord[]): KaraokeWord[] {
+  if (!words || words.length === 0) return [];
+
+  // Xây dựng chuỗi toàn văn bản kèm vị trí ký tự của từng từ
+  let fullText = '';
+  const wordRanges: Array<{ startChar: number; endChar: number; index: number }> = [];
+
+  for (let i = 0; i < words.length; i++) {
+    const w = words[i].word;
+    const prefix = i === 0 ? '' : ' ';
+    const actualStart = fullText.length + prefix.length;
+    fullText += prefix + w;
+    const endChar = fullText.length;
+    wordRanges.push({ startChar: actualStart, endChar, index: i });
+  }
+
+  const toRemoveIndices = new Set<number>();
+
+  // 1. Quét toàn bộ regex trên chuỗi fullText và xác định chính xác phạm vi từ bị ảnh hưởng
+  for (const regex of HALLUCINATION_REGEXES) {
+    const globalRegex = new RegExp(regex.source, 'gi');
+    let match: RegExpExecArray | null;
+    while ((match = globalRegex.exec(fullText)) !== null) {
+      const matchStart = match.index;
+      const matchEnd = match.index + match[0].length;
+
+      for (const range of wordRanges) {
+        // Kiểm tra overlap giữa range từ và range match
+        if (range.startChar < matchEnd && range.endChar > matchStart) {
+          toRemoveIndices.add(range.index);
+        }
+      }
+    }
+  }
+
+  // 2. Quét các từ đơn lẻ chứa từ khóa ảo giác đặc trưng
+  for (let i = 0; i < words.length; i++) {
+    const w = words[i];
+    const clean = cleanWordForCompare(w.word);
+    if (['subscribe', 'subcribe'].includes(clean)) {
+      toRemoveIndices.add(i);
+    }
+    // Anomaly: 1 từ kéo dài bất thường (> 5.0s) chứa từ khóa nghi vấn
+    if (w.end - w.start > 5.0 && ['mì', 'gõ', 'kênh', 'video', 'bỏ', 'lỡ', 'hấp', 'dẫn'].includes(clean)) {
+      toRemoveIndices.add(i);
+    }
+  }
+
+  const filtered = words.filter((_, idx) => !toRemoveIndices.has(idx));
+  if (toRemoveIndices.size > 0) {
+    console.log(`[SubtitleFixer] Anti-Hallucination Purged ${toRemoveIndices.size} hallucinated words.`);
+  }
+
+  return filtered;
+}
+
+/**
  * Các liên từ, trợ từ, động từ thường ở giữa câu bắt buộc viết thường nếu không phải mở đầu câu mới
  */
 const CONTINUATION_WORDS = new Set<string>([
@@ -108,7 +187,7 @@ function formatWord(rawWord: string, isStartOfSentence: boolean, isFirstWordInLi
 }
 
 /**
- * Gọi Gemini 3.1 Flash Lite để sửa lỗi chính tả ngữ cảnh tiếng Việt
+ * Gọi Gemini 3.1 Flash Lite để sửa lỗi chính tả ngữ cảnh tiếng Việt và loại bỏ ảo giác (Lớp 2)
  */
 async function fixVietnameseSpellingWithAI(
   rawText: string,
@@ -121,16 +200,21 @@ async function fixVietnameseSpellingWithAI(
   const promptText = rawText || rawWords.map((w) => w.word).join(' ');
 
   const systemPrompt = `Bạn là chuyên gia ngôn ngữ học tiếng Việt và biên tập ngữ pháp, chính tả văn phong truyền cảm, thơ ca, triết lý nhân sinh.
-Nhiệm vụ của bạn: Kiểm tra văn bản tiếng Việt được bóc tách từ giọng nói (Speech-to-Text) và SỬA CÁC LỖI SAI CHÍNH TẢ, SAI THANH ĐIỆU (hỏi/ngã, sắc/huyền/nặng), NHẦM LẪN PHỤ ÂM ĐẦU HOẶC VẦN (như b/m, d/gi/r, s/x, tr/ch, iêm/im, an/ang, dâng/dân, đừng/đứng, mũa/bủa, tìm tàn/tiềm tàng, dũ/dù/dẫu...) theo đúng ngữ nghĩa tự nhiên của câu văn.
+Nhiệm vụ của bạn:
+1. Kiểm tra văn bản tiếng Việt được bóc tách từ giọng nói (Speech-to-Text) và SỬA CÁC LỖI SAI CHÍNH TẢ, SAI THANH ĐIỆU (hỏi/ngã, sắc/huyền/nặng), NHẦM LẪN PHỤ ÂM ĐẦU HOẶC VẦN (như b/m, d/gi/r, s/x, tr/ch, iêm/im, an/ang, dâng/dân, đừng/đứng, mũa/bủa, tìm tàn/tiềm tàng, dũ/dù/dẫu...) theo đúng ngữ nghĩa tự nhiên của câu văn.
+2. PHÁT HIỆN VÀ LOẠI BỎ TRIỆT ĐỂ CÁC CÂU ẢO GIÁC (Whisper Hallucinations): Nếu trong văn bản xuất hiện các câu kêu gọi YouTube/TikTok outro như "Hãy subscribe cho kênh", "Ghiền mì gõ", "để không bỏ lỡ video", "like và share", "bấm chuông", "cảm ơn đã theo dõi", "hẹn gặp lại"... mà không thuộc nội dung chính của bài đọc, BẮT BUỘC LOẠI BỎ HOÀN TOÀN khỏi corrected_text và đưa vào danh sách hallucinated_phrases.
 
 CÁC QUY TẮC BẮT BUỘC:
 1. CHỈ sửa những từ bị sai âm, sai nghĩa hoặc sai chính tả trong ngữ cảnh. TUYỆT ĐỐI KHÔNG viết lại văn phong, KHÔNG thêm bớt ý nghĩa, KHÔNG thay đổi cấu trúc câu nếu từ gốc đã có nghĩa đúng.
-2. Giữ nguyên tối đa số lượng từ (1 từ thay bằng 1 từ, 2 từ thay bằng 2 từ) để không làm lệch mốc thời gian giọng đọc.
+2. Giữ nguyên tối đa số lượng từ (1 từ thay bằng 1 từ, 2 từ thay bằng 2 từ) đối với các câu chính để không làm lệch mốc thời gian giọng đọc.
 3. Trả về DUY NHẤT một khối JSON hợp lệ theo cấu trúc sau (không kèm lời giải thích nào khác):
 {
-  "corrected_text": "Toàn bộ văn bản đã sửa đúng chính tả",
+  "corrected_text": "Toàn bộ văn bản đã sửa đúng chính tả (đã loại bỏ hết câu ảo giác)",
   "corrections": [
     {"original": "từ_hoặc_cụm_sai", "corrected": "từ_hoặc_cụm_đúng"}
+  ],
+  "hallucinated_phrases": [
+    "cụm từ hoặc câu ảo giác cần xóa bỏ nếu có"
   ]
 }`;
 
@@ -145,7 +229,12 @@ CÁC QUY TẮC BẮT BUỘC:
       ],
     });
 
-    let parsedResult: { corrected_text?: string; corrections?: Array<{ original: string; corrected: string }> } = {};
+    let parsedResult: {
+      corrected_text?: string;
+      corrections?: Array<{ original: string; corrected: string }>;
+      hallucinated_phrases?: string[];
+    } = {};
+
     try {
       const jsonMatch = aiResponse.match(/\{[\s\S]*\}/);
       if (jsonMatch) {
@@ -156,10 +245,32 @@ CÁC QUY TẮC BẮT BUỘC:
     }
 
     const corrections = Array.isArray(parsedResult.corrections) ? parsedResult.corrections : [];
+    const hallucinatedPhrases = Array.isArray(parsedResult.hallucinated_phrases) ? parsedResult.hallucinated_phrases : [];
     const correctedText = parsedResult.corrected_text || '';
 
+    // Nếu AI phát hiện câu ảo giác, loại bỏ khỏi rawWords trước
+    let workingWords = [...rawWords];
+    for (const hPhrase of hallucinatedPhrases) {
+      const hTokens = cleanWordForCompare(hPhrase).split(/\s+/).filter(Boolean);
+      if (hTokens.length === 0) continue;
+
+      for (let i = 0; i <= workingWords.length - hTokens.length; i++) {
+        let match = true;
+        for (let j = 0; j < hTokens.length; j++) {
+          if (cleanWordForCompare(workingWords[i + j].word) !== hTokens[j]) {
+            match = false;
+            break;
+          }
+        }
+        if (match) {
+          workingWords.splice(i, hTokens.length);
+          i--;
+        }
+      }
+    }
+
     // Áp dụng thuật toán Word-Alignment & Time Interpolation
-    const alignedWords = alignCorrectedWordsWithTimestamps(rawWords, corrections, correctedText);
+    const alignedWords = alignCorrectedWordsWithTimestamps(workingWords, corrections, correctedText);
 
     return {
       correctedWords: alignedWords,
@@ -377,7 +488,62 @@ export function segmentAndPolishSubtitles(rawWords: KaraokeWord[]): SubtitleLine
 }
 
 /**
- * Xử lý chuẩn hóa, sửa lỗi chính tả ngữ cảnh bằng AI và ngắt dòng phụ đề chuẩn cho toàn hệ thống
+ * Tự động phân bổ lại mốc thời gian và chia dòng phụ đề khi người dùng sửa toàn bộ văn bản (Bulk Edit)
+ */
+export async function realignAndSegmentFromCustomText(
+  customText: string,
+  rawWords: KaraokeWord[],
+  totalDuration: number
+): Promise<SubtitleLine[]> {
+  if (!customText || !customText.trim()) {
+    return [];
+  }
+
+  const cleanText = customText.trim();
+  const tokens = cleanText.split(/\s+/).filter(Boolean);
+  if (tokens.length === 0) return [];
+
+  let alignedWords: KaraokeWord[] = [];
+
+  if (rawWords && rawWords.length > 0) {
+    const rawStart = rawWords[0].start;
+    const rawEnd = Math.max(rawWords[rawWords.length - 1].end, totalDuration || rawWords[rawWords.length - 1].end);
+    const totalSpan = Math.max(0.5, rawEnd - rawStart);
+
+    if (tokens.length === rawWords.length) {
+      // 1-to-1 matching: giữ nguyên mốc thời gian của từng từ gốc
+      alignedWords = tokens.map((token, idx) => ({
+        word: token,
+        start: rawWords[idx].start,
+        end: rawWords[idx].end,
+      }));
+    } else {
+      // Số lượng từ thay đổi: nội suy đều thời gian theo tỷ lệ
+      const wordDur = totalSpan / tokens.length;
+      alignedWords = tokens.map((token, idx) => ({
+        word: token,
+        start: Number((rawStart + idx * wordDur).toFixed(2)),
+        end: Number((rawStart + (idx + 1) * wordDur).toFixed(2)),
+      }));
+    }
+  } else {
+    // Không có rawWords: nội suy đều trên toàn bộ totalDuration
+    const validDur = totalDuration > 0 ? totalDuration : 30.0;
+    const wordDur = validDur / tokens.length;
+    alignedWords = tokens.map((token, idx) => ({
+      word: token,
+      start: Number((idx * wordDur).toFixed(2)),
+      end: Number(((idx + 1) * wordDur).toFixed(2)),
+    }));
+  }
+
+  // Lọc bỏ ảo giác nếu còn sót lại và phân đoạn dòng 3-6 từ
+  const filteredWords = filterHallucinatedWords(alignedWords);
+  return segmentAndPolishSubtitles(filteredWords);
+}
+
+/**
+ * Xử lý chuẩn hóa, sửa lỗi chính tả ngữ cảnh bằng AI, lọc ảo giác 2 lớp và ngắt dòng phụ đề chuẩn cho toàn hệ thống
  */
 export async function polishAndSegmentSubtitles(
   rawText: string,
@@ -387,10 +553,21 @@ export async function polishAndSegmentSubtitles(
     return [];
   }
 
-  console.log('[SubtitleFixer] Running Gemini contextual spell-check on', rawWords.length, 'words...');
-  const { correctedWords } = await fixVietnameseSpellingWithAI(rawText, rawWords);
+  // Lớp 1: Lọc bỏ các từ/mẫu câu ảo giác từ Whisper
+  const preFilteredWords = filterHallucinatedWords(rawWords);
+  if (preFilteredWords.length === 0) {
+    return [];
+  }
+
+  console.log('[SubtitleFixer] Running Gemini contextual spell-check & anti-hallucination on', preFilteredWords.length, 'words...');
+  
+  // Lớp 2: Gemini Contextual Spell-Check & Hallucination Purge
+  const { correctedWords } = await fixVietnameseSpellingWithAI(rawText, preFilteredWords);
+
+  // Hậu kiểm: Quét lại mẫu câu ảo giác sau khi sửa
+  const postFilteredWords = filterHallucinatedWords(correctedWords);
 
   // Phân đoạn dòng phụ đề 3-6 từ cho 9:16
-  return segmentAndPolishSubtitles(correctedWords);
+  return segmentAndPolishSubtitles(postFilteredWords);
 }
 

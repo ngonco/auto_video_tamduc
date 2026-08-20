@@ -23,7 +23,12 @@ import {
   Layers,
   Database,
   Film,
-  Shuffle
+  Shuffle,
+  FileEdit,
+  List,
+  Plus,
+  ShieldCheck,
+  ArrowDownToLine
 } from 'lucide-react';
 import { SubtitleLine } from '../../remotion/types.js';
 
@@ -94,8 +99,12 @@ export const GeneratorWizard: React.FC<GeneratorWizardProps> = ({
   const [processingSTT, setProcessingSTT] = useState(false);
   const [subtitles, setSubtitles] = useState<SubtitleLine[]>([]);
   const [fullTranscript, setFullTranscript] = useState<string>('');
+  const [bulkTranscript, setBulkTranscript] = useState<string>('');
+  const [subViewMode, setSubViewMode] = useState<'lines' | 'bulk'>('lines');
   const [editingSubIdx, setEditingSubIdx] = useState<number | null>(null);
   const [editingSubText, setEditingSubText] = useState<string>('');
+  const [savingSubs, setSavingSubs] = useState(false);
+  const [resegmenting, setResegmenting] = useState(false);
 
   // Storyline assembly
   const [assembling, setAssembling] = useState(false);
@@ -230,6 +239,7 @@ export const GeneratorWizard: React.FC<GeneratorWizardProps> = ({
       const data = await res.json();
       if (data.success) {
         setFullTranscript(data.data.rawText);
+        setBulkTranscript(data.data.rawText);
         setVoiceDuration(data.data.duration);
         setSubtitles(data.data.subtitles);
         fetchSavedVoices(); // Cập nhật lại lịch sử voice
@@ -243,13 +253,36 @@ export const GeneratorWizard: React.FC<GeneratorWizardProps> = ({
     }
   };
 
+  // Tự động lưu tức thì phụ đề vào SQLite Database
+  const autoSaveSubtitles = async (newSubs: SubtitleLine[], newTranscript?: string) => {
+    if (!voicePath) return;
+    try {
+      setSavingSubs(true);
+      const textToSave = newTranscript !== undefined ? newTranscript : newSubs.map((s) => s.text).join(' ');
+      await fetch('/api/generator/update-subtitles', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          voicePath,
+          subtitles: newSubs,
+          fullTranscript: textToSave,
+        }),
+      });
+      fetchSavedVoices();
+    } catch (err) {
+      console.warn('[GeneratorWizard] Error auto-saving subtitles:', err);
+    } finally {
+      setSavingSubs(false);
+    }
+  };
+
   // Xử lý chỉnh sửa nhanh 1 dòng phụ đề
   const handleStartEditSub = (idx: number, currentText: string) => {
     setEditingSubIdx(idx);
     setEditingSubText(currentText);
   };
 
-  const handleSaveEditSub = (idx: number) => {
+  const handleSaveEditSub = async (idx: number) => {
     if (editingSubIdx === null) return;
     const trimmed = editingSubText.trim();
     if (!trimmed) return;
@@ -269,6 +302,7 @@ export const GeneratorWizard: React.FC<GeneratorWizardProps> = ({
         })),
       };
       setSubtitles(newSubs);
+      await autoSaveSubtitles(newSubs);
     }
     setEditingSubIdx(null);
     setEditingSubText('');
@@ -279,12 +313,68 @@ export const GeneratorWizard: React.FC<GeneratorWizardProps> = ({
     setEditingSubText('');
   };
 
+  // Xóa 1 dòng phụ đề thừa / ảo giác
+  const handleDeleteSubLine = async (idx: number) => {
+    const newSubs = subtitles.filter((_, i) => i !== idx);
+    setSubtitles(newSubs);
+    await autoSaveSubtitles(newSubs);
+  };
+
+  // Gộp dòng hiện tại với dòng kế tiếp
+  const handleMergeSubWithNext = async (idx: number) => {
+    if (idx >= subtitles.length - 1) return;
+    const current = subtitles[idx];
+    const next = subtitles[idx + 1];
+    const merged: SubtitleLine = {
+      id: current.id,
+      start: current.start,
+      end: next.end,
+      text: `${current.text} ${next.text}`,
+      words: [...current.words, ...next.words],
+    };
+    const newSubs = [...subtitles.slice(0, idx), merged, ...subtitles.slice(idx + 2)];
+    setSubtitles(newSubs);
+    await autoSaveSubtitles(newSubs);
+  };
+
+  // Áp dụng văn bản tùy chỉnh toàn bài (Bulk Transcript Editor)
+  const handleApplyBulkTranscript = async () => {
+    if (!bulkTranscript.trim() || !voicePath) return;
+    try {
+      setResegmenting(true);
+      setErrorMsg('');
+      const res = await fetch('/api/generator/resegment-transcript', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          voicePath,
+          customText: bulkTranscript,
+          duration: voiceDuration,
+        }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setSubtitles(data.data.subtitles);
+        setFullTranscript(data.data.fullTranscript);
+        setSubViewMode('lines');
+        fetchSavedVoices();
+      } else {
+        setErrorMsg(data.error || 'Lỗi phân bổ lại phụ đề');
+      }
+    } catch (err: any) {
+      setErrorMsg(err.message);
+    } finally {
+      setResegmenting(false);
+    }
+  };
+
   // 4. Chọn Voice từ Lịch sử Đã Nạp
   const handleSelectSavedVoice = (saved: SavedVoiceItem) => {
     setVoiceName(saved.file_name);
     setVoicePath(saved.file_path);
     setVoiceDuration(saved.duration);
     setFullTranscript(saved.stt_text || '');
+    setBulkTranscript(saved.stt_text || (saved.subtitles || []).map((s) => s.text).join(' '));
     setSubtitles(saved.subtitles || []);
     setErrorMsg('');
   };
@@ -299,6 +389,8 @@ export const GeneratorWizard: React.FC<GeneratorWizardProps> = ({
         setVoicePath('');
         setVoiceName('');
         setSubtitles([]);
+        setFullTranscript('');
+        setBulkTranscript('');
         setVoiceDuration(0);
       }
     } catch (_) {}
@@ -539,98 +631,209 @@ export const GeneratorWizard: React.FC<GeneratorWizardProps> = ({
           {/* Hiển Thị Subtitle Đã Xử Lý */}
           {subtitles.length > 0 && (
             <div className="mt-4 p-4 bg-slate-900/90 rounded-xl border border-amber-500/20 text-xs">
-              <div className="flex flex-wrap items-center justify-between gap-2 mb-2 pb-2 border-b border-slate-800">
-                <div className="flex items-center gap-2">
-                  <span className="font-bold text-amber-300 flex items-center gap-1.5">
-                    <FileText className="w-3.5 h-3.5" />
-                    Phụ Đề Đã Chuẩn Hóa ({subtitles.length} dòng • {voiceDuration.toFixed(1)}s):
+              {/* Header thanh công cụ Subtitles */}
+              <div className="flex flex-wrap items-center justify-between gap-3 mb-3 pb-3 border-b border-slate-800">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="font-bold text-amber-300 flex items-center gap-1.5 font-montserrat">
+                    <FileText className="w-4 h-4 text-amber-400" />
+                    Phụ Đề ({subtitles.length} dòng • {voiceDuration.toFixed(1)}s):
                   </span>
-                  <span className="text-[10px] bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-1.5 py-0.5 rounded font-mono">
-                    AI Spell-Checked
+                  <span className="text-[10px] bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-2 py-0.5 rounded-full font-mono flex items-center gap-1">
+                    <ShieldCheck className="w-3 h-3 text-emerald-400" />
+                    AI Cleaned & Spell-Checked
+                  </span>
+                  <span className="text-[10px] text-slate-400 font-mono">
+                    {savingSubs ? '💾 Đang lưu...' : '✓ Đã lưu Database'}
                   </span>
                 </div>
+
                 <div className="flex items-center gap-2">
+                  {/* Chuyển chế độ xem */}
+                  <div className="flex bg-slate-950 p-0.5 rounded-lg border border-slate-800">
+                    <button
+                      type="button"
+                      onClick={() => setSubViewMode('lines')}
+                      className={`flex items-center gap-1 px-2.5 py-1 rounded text-[11px] font-medium transition ${
+                        subViewMode === 'lines'
+                          ? 'bg-amber-500 text-slate-950 font-bold'
+                          : 'text-slate-400 hover:text-slate-200'
+                      }`}
+                    >
+                      <List className="w-3 h-3" />
+                      Từng Dòng
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setBulkTranscript(fullTranscript || subtitles.map((s) => s.text).join(' '));
+                        setSubViewMode('bulk');
+                      }}
+                      className={`flex items-center gap-1 px-2.5 py-1 rounded text-[11px] font-medium transition ${
+                        subViewMode === 'bulk'
+                          ? 'bg-amber-500 text-slate-950 font-bold'
+                          : 'text-slate-400 hover:text-slate-200'
+                      }`}
+                    >
+                      <FileEdit className="w-3 h-3" />
+                      Sửa Toàn Bộ
+                    </button>
+                  </div>
+
                   <button
                     type="button"
                     onClick={() => processVoiceFile(voicePath, voiceName, true)}
                     disabled={processingSTT}
-                    className="flex items-center gap-1 px-2 py-1 bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border border-amber-500/30 rounded text-[11px] font-medium transition disabled:opacity-50"
-                    title="Chạy lại Gemini 3.1 Flash Lite để sửa chính tả ngữ cảnh"
+                    className="flex items-center gap-1 px-2.5 py-1 bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border border-amber-500/30 rounded text-[11px] font-medium transition disabled:opacity-50"
+                    title="Chạy lại Gemini 3.1 Flash Lite để sửa chính tả ngữ cảnh & lọc ảo giác"
                   >
                     <Wand2 className={`w-3 h-3 ${processingSTT ? 'animate-spin' : ''}`} />
                     {processingSTT ? 'Đang sửa AI...' : 'Chạy Lại Sửa AI'}
                   </button>
-                  <span className="text-[10px] text-slate-400 font-mono">Word Timestamps Ready</span>
                 </div>
               </div>
 
-              <div className="max-h-48 overflow-y-auto space-y-1.5 pr-2">
-                {subtitles.map((sub, i) => {
-                  const isEditing = editingSubIdx === i;
-                  return (
-                    <div
-                      key={i}
-                      className={`p-1.5 rounded-lg transition ${
-                        isEditing
-                          ? 'bg-amber-500/10 border border-amber-500/40'
-                          : 'hover:bg-slate-800/60 flex items-center justify-between gap-2'
-                      }`}
-                    >
-                      {isEditing ? (
-                        <div className="flex items-center gap-2 w-full">
-                          <span className="text-slate-500 font-mono text-[10px] w-14 flex-shrink-0">
-                            {sub.start.toFixed(1)}s:
-                          </span>
-                          <input
-                            type="text"
-                            value={editingSubText}
-                            onChange={(e) => setEditingSubText(e.target.value)}
-                            onKeyDown={(e) => {
-                              if (e.key === 'Enter') handleSaveEditSub(i);
-                              if (e.key === 'Escape') handleCancelEditSub();
-                            }}
-                            autoFocus
-                            className="flex-1 bg-slate-950 border border-amber-500/50 rounded px-2 py-1 text-xs text-slate-100 focus:outline-none focus:border-amber-400"
-                          />
-                          <button
-                            type="button"
-                            onClick={() => handleSaveEditSub(i)}
-                            className="p-1 bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30 rounded"
-                            title="Lưu (Enter)"
-                          >
-                            <Check className="w-3.5 h-3.5" />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={handleCancelEditSub}
-                            className="p-1 bg-slate-800 text-slate-400 hover:bg-slate-700 rounded"
-                            title="Hủy (Esc)"
-                          >
-                            <X className="w-3.5 h-3.5" />
-                          </button>
-                        </div>
-                      ) : (
-                        <>
-                          <div className="flex gap-2 text-[11px] text-slate-300 flex-1 min-w-0">
-                            <span className="text-slate-500 font-mono w-14 flex-shrink-0">
+              {/* CHẾ ĐỘ 1: XEM & SỬA TỪNG DÒNG (Line-by-line Editor) */}
+              {subViewMode === 'lines' && (
+                <div className="max-h-60 overflow-y-auto space-y-1.5 pr-2">
+                  {subtitles.map((sub, i) => {
+                    const isEditing = editingSubIdx === i;
+                    const isLast = i === subtitles.length - 1;
+                    return (
+                      <div
+                        key={sub.id || i}
+                        className={`group p-2 rounded-lg transition ${
+                          isEditing
+                            ? 'bg-amber-500/10 border border-amber-500/40'
+                            : 'hover:bg-slate-800/60 bg-slate-950/40 border border-slate-800/50 flex items-center justify-between gap-2'
+                        }`}
+                      >
+                        {isEditing ? (
+                          <div className="flex items-center gap-2 w-full">
+                            <span className="text-slate-500 font-mono text-[10px] w-14 flex-shrink-0">
                               {sub.start.toFixed(1)}s - {sub.end.toFixed(1)}s:
                             </span>
-                            <span className="font-medium text-slate-200 truncate">{sub.text}</span>
+                            <input
+                              type="text"
+                              value={editingSubText}
+                              onChange={(e) => setEditingSubText(e.target.value)}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter') handleSaveEditSub(i);
+                                if (e.key === 'Escape') handleCancelEditSub();
+                              }}
+                              autoFocus
+                              className="flex-1 bg-slate-950 border border-amber-500/50 rounded px-2.5 py-1 text-xs text-slate-100 focus:outline-none focus:border-amber-400"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => handleSaveEditSub(i)}
+                              className="p-1 bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30 rounded"
+                              title="Lưu (Enter)"
+                            >
+                              <Check className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={handleCancelEditSub}
+                              className="p-1 bg-slate-800 text-slate-400 hover:bg-slate-700 rounded"
+                              title="Hủy (Esc)"
+                            >
+                              <X className="w-3.5 h-3.5" />
+                            </button>
                           </div>
-                          <button
-                            type="button"
-                            onClick={() => handleStartEditSub(i, sub.text)}
-                            className="opacity-0 group-hover:opacity-100 hover:opacity-100 p-1 text-slate-400 hover:text-amber-300 rounded transition flex-shrink-0"
-                            title="Nhấp để sửa nhanh dòng này"
-                          >
-                            <Edit2 className="w-3 h-3" />
-                          </button>
-                        </>
-                      )}
+                        ) : (
+                          <>
+                            <div className="flex items-center gap-2 text-[11px] text-slate-300 flex-1 min-w-0">
+                              <span className="text-slate-500 font-mono text-[10px] w-20 flex-shrink-0 bg-slate-900 px-1.5 py-0.5 rounded border border-slate-800 text-center">
+                                {sub.start.toFixed(1)}s - {sub.end.toFixed(1)}s
+                              </span>
+                              <span className="font-medium text-slate-200 truncate">{sub.text}</span>
+                            </div>
+
+                            <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 hover:opacity-100 transition flex-shrink-0">
+                              <button
+                                type="button"
+                                onClick={() => handleStartEditSub(i, sub.text)}
+                                className="p-1 text-slate-400 hover:text-amber-300 hover:bg-slate-800 rounded transition"
+                                title="Sửa nhanh dòng này"
+                              >
+                                <Edit2 className="w-3.5 h-3.5" />
+                              </button>
+
+                              {!isLast && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleMergeSubWithNext(i)}
+                                  className="p-1 text-slate-400 hover:text-cyan-300 hover:bg-slate-800 rounded transition"
+                                  title="Gộp với dòng kế tiếp"
+                                >
+                                  <ArrowDownToLine className="w-3.5 h-3.5" />
+                                </button>
+                              )}
+
+                              <button
+                                type="button"
+                                onClick={() => handleDeleteSubLine(i)}
+                                className="p-1 text-slate-400 hover:text-red-400 hover:bg-slate-800 rounded transition"
+                                title="Xóa dòng này (nếu câu thừa/ảo giác)"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          </>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              {/* CHẾ ĐỘ 2: SỬA TOÀN BỘ VĂN BẢN (Bulk Transcript Editor) */}
+              {subViewMode === 'bulk' && (
+                <div className="space-y-2.5">
+                  <p className="text-[11px] text-slate-400">
+                    Chỉnh sửa hoặc xóa các đoạn văn bản thừa trực tiếp dưới đây. Khi nhấn "Áp Dụng", hệ thống sẽ tự động phân bổ lại mốc thời gian và chia dòng 9:16 tối ưu:
+                  </p>
+                  <textarea
+                    value={bulkTranscript}
+                    onChange={(e) => setBulkTranscript(e.target.value)}
+                    rows={5}
+                    className="w-full bg-slate-950 border border-slate-700 rounded-xl p-3 text-xs text-slate-100 focus:outline-none focus:border-amber-400 leading-relaxed font-sans"
+                    placeholder="Nhập hoặc chỉnh sửa toàn bộ văn bản của giọng đọc..."
+                  />
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="text-[10px] text-slate-500 font-mono">
+                      {bulkTranscript.trim().split(/\s+/).filter(Boolean).length} từ • {voiceDuration.toFixed(1)}s
+                    </span>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setSubViewMode('lines')}
+                        className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-xs font-medium transition"
+                      >
+                        Hủy Bỏ
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleApplyBulkTranscript}
+                        disabled={resegmenting || !bulkTranscript.trim()}
+                        className="flex items-center gap-1.5 px-4 py-1.5 bg-gradient-to-r from-amber-500 to-yellow-500 hover:from-amber-600 hover:to-yellow-600 text-slate-950 rounded-lg text-xs font-bold transition shadow-md shadow-amber-500/20 disabled:opacity-50"
+                      >
+                        {resegmenting ? (
+                          <>
+                            <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                            Đang Phân Dòng...
+                          </>
+                        ) : (
+                          <>
+                            <Sparkles className="w-3.5 h-3.5 fill-slate-950" />
+                            Áp Dụng & Tự Động Phân Dòng 9:16
+                          </>
+                        )}
+                      </button>
                     </div>
-                  );
-                })}
-              </div>
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </div>

@@ -110,11 +110,16 @@ Tổng thời lượng Video = Thời lượng Voice chính xác (T giây từ f
 
 * Quy Tắc Đồng Bộ Thời Gian & Tránh Lệch / Thiếu Video & Phụ Đề So Với Voice:
   1. Thời lượng Voice: Luôn đo đạc bằng ffprobe (VideoMetadata) để lấy chính xác 100% độ dài audio, không bị cụt đuôi do khoảng lặng cuối câu.
-  2. Phân đoạn Phụ đề & Đồng Bộ Karaoke 2 Tầng (2-Layer AI Contextual Spell-Check & Word-Alignment Engine):
-     - **Tầng 1 (Whisper Initial Prompt)**: Truyền prompt tiếng Việt giàu ngữ cảnh để Whisper định hướng âm học chính xác ngay từ đầu, hạn chế tối đa nhầm lẫn dấu và phụ âm.
-     - **Tầng 2 (Gemini Contextual AI Spell-Check)**: Gửi văn bản STT qua `ts/gemini-3.1-flash-lite` với system prompt chuyên sâu về tiếng Việt, phân tích ngữ nghĩa toàn câu để phát hiện và sửa các lỗi sai âm (như *tìm tàn* ➔ *tiềm tàng*, *mũa vây* ➔ *bủa vây*, *dâng tộc đừng* ➔ *dân tộc đứng*, *cùng dũ* ➔ *cùng dù/dẫu*...).
+  2. Phân đoạn Phụ đề, Chống Ảo Giác & Đồng Bộ Karaoke 2 Tầng (2-Layer Anti-Hallucination & AI Spell-Check Engine):
+     - **Tầng 1 (Whisper Prompt & Deterministic Purge)**:
+       + Truyền prompt tiếng Việt chuẩn mực từ vựng ngữ cảnh tự nhiên để định hướng Whisper.
+       + Bộ lọc `filterHallucinatedWords`: Ánh xạ phạm vi ký tự và quét sạch các mẫu câu ảo giác điển hình của Whisper (như *Hãy subscribe cho kênh, Ghiền mì gõ, để không bỏ lỡ video, like và share, bấm chuông, cảm ơn đã theo dõi...*) và các từ kéo dài bất thường do khoảng lặng.
+     - **Tầng 2 (Gemini Contextual AI Spell-Check & Hallucination Purge)**: Gửi văn bản STT qua `ts/gemini-3.1-flash-lite` với system prompt chuyên sâu về tiếng Việt, phân tích ngữ nghĩa toàn câu để vừa sửa các lỗi sai âm (như *tìm tàn* ➔ *tiềm tàng*, *mũa vây* ➔ *bủa vây*, *dâng tộc đừng* ➔ *dân tộc đứng*, *phải xuyên* ➔ *phải siêng*...) vừa phát hiện và loại bỏ triệt để các câu ảo giác lạc đề.
      - **Tầng 3 (Word-Alignment & Time Interpolation Engine)**: Thuật toán so khớp chuỗi ánh xạ trực tiếp các từ đã sửa vào mảng `KaraokeWord[]` gốc, bảo toàn 100% mốc thời gian `start`, `end`. Khi 1 từ tách thành N từ hoặc N từ gộp thành 1 từ, hệ thống tự động nội suy thời lượng để không làm lệch nhịp Karaoke.
-     - **Tầng 4 (Giao diện Sửa Nhanh Subtitle Inline UI)**: Cho phép xem trực quan các dòng phụ đề, click sửa nhanh trực tiếp trên Wizard hoặc chạy lại AI sửa chính tả chỉ với 1 click.
+     - **Tầng 4 (Bộ Công Cụ Sửa Phụ Đề Toàn Diện & Auto-Save Database)**:
+       + **Xem & Sửa Từng Dòng (Line-by-line Editor)**: Cho phép sửa nhanh text từng dòng (phím Enter/Esc), gộp dòng với dòng kế tiếp, hoặc xóa hẳn dòng thừa/ảo giác chỉ với 1 click.
+       + **Sửa Toàn Bộ Văn Bản (Bulk Transcript Editor)**: Cho phép biên tập lại toàn bộ nội dung bài nói trong textarea lớn và nhấn "Áp Dụng & Tự Động Phân Dòng 9:16" (`realignAndSegmentFromCustomText`).
+       + **Tự Động Lưu Tức Thì (Auto-Save)**: Mọi thao tác sửa/xóa/gộp/áp dụng đều tự động lưu ngay vào bảng `voices` trong SQLite (`/api/generator/update-subtitles`).
      - Đồng bộ 100% giữa Preview & Video xuất ra (FFmpeg ASS):
        + Chữ hiển thị: Viết IN HOA toàn bộ (UPPERCASE), trang nghiêm, dễ đọc.
        + Hiệu ứng Karaoke: Chữ chưa đọc màu Trắng (#FFFFFF / &H00FFFFFF), khi giọng đọc tới đâu đổi sang màu Vàng Kim (#FFD700 / &H0000D7FF) tới đó kèm viền đen 3.5px và đổ bóng sắc nét.
@@ -317,8 +322,11 @@ CREATE TABLE voices (
 | `POST` | `/api/generator/pick-media` | `{ initialDir?: string }` | Mở hộp thoại Windows chọn file Video hoặc Ảnh (.mp4, .mov, .jpg, .png...) thay thế clip qua `media-picker.ps1` |
 | `DELETE`| `/api/generator/voices/:id` | - | Xóa voice khỏi danh sách lịch sử |
 | `POST` | `/api/generator/upload-voice` | FormData (`file`) | Tải lên file Voice (.mp3, .wav, .m4a) qua web |
-| `POST` | `/api/generator/process-voice` | `{ filePath, duration }` | Nhận diện STT Whisper + Gemini sửa phụ đề Phật học & tự động lưu lịch sử |
-| `POST` | `/api/generator/assemble-storyline`| `{ voiceDuration, projectId, outro? }` | Tự động phân bổ clip 4 giai đoạn khớp thời lượng Voice (kèm cấu hình Outro) |
+| `POST` | `/api/generator/process-voice` | `{ filePath, duration, forceRefresh? }` | Nhận diện STT Whisper + Gemini sửa phụ đề Phật học, lọc sạch ảo giác & tự động lưu lịch sử |
+| `POST` | `/api/generator/update-subtitles` | `{ voicePath, subtitles, fullTranscript? }` | Cập nhật và lưu tức thì danh sách phụ đề vào bảng voices SQLite (khi sửa/xóa/gộp dòng) |
+| `POST` | `/api/generator/resegment-transcript` | `{ voicePath, customText, duration? }` | Phân bổ lại toàn bộ phụ đề từ văn bản tùy chỉnh (Bulk Transcript Editor) |
+| `POST` | `/api/generator/assemble-storyline`| `{ targetDuration, mode?: 'single' \| 'all', projectId?, outro? }` | Tự động phân bổ clip 4 giai đoạn theo chế độ 1 công trình hoặc toàn bộ thư viện (kèm chống trùng lặp vừa phải & Usage Memory) |
+| `GET` | `/api/generator/library-summary` | - | Lấy thống kê tổng quan thư viện (tổng số công trình, clips, thời lượng) |
 | `GET` | `/api/generator/bgm-list` | - | Lấy danh sách nhạc thiền BGM |
 | `POST` | `/api/render/start` | `{ videoId, projectName, voicePath, clips, subtitles, subtitleFontSize?, subtitleBottomPercent?, outroPath, outroEnabled, outroDuration }` | Bắt đầu Render video MP4 1080x1920 qua FFmpeg (kèm đồng bộ size phụ đề ASS & Outro unmuted audio & BGM fade-out) |
 | `GET` | `/api/render/status/:jobId` | - | Lấy tiến độ % render (0 - 100%) và đường dẫn file output chính xác |

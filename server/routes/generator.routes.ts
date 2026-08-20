@@ -6,7 +6,11 @@ import { execFile } from 'child_process';
 import { v4 as uuidv4 } from 'uuid';
 import { db } from '../db.js';
 import { transcribeAudio } from '../services/stt-service.js';
-import { polishAndSegmentSubtitles, segmentAndPolishSubtitles } from '../services/subtitle-fixer.js';
+import {
+  polishAndSegmentSubtitles,
+  segmentAndPolishSubtitles,
+  realignAndSegmentFromCustomText
+} from '../services/subtitle-fixer.js';
 import { generateStoryline, SourceClipRecord } from '../services/storyline-engine.js';
 import { getVideoMetadata, extractKeyframes } from '../services/ffmpeg.js';
 
@@ -272,6 +276,80 @@ generatorRouter.post('/process-voice', async (req, res) => {
         duration: accurateDuration,
         words: sttResult.words,
         subtitles: polishedSubtitles,
+      },
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// 5b. Cập nhật và lưu tức thì danh sách phụ đề vào SQLite Database (khi sửa/xóa/gộp dòng)
+generatorRouter.post('/update-subtitles', (req, res) => {
+  try {
+    const { voicePath, voiceId, subtitles, fullTranscript } = req.body;
+    if (!voicePath && !voiceId) {
+      return res.status(400).json({ success: false, error: 'Thiếu voicePath hoặc voiceId' });
+    }
+    if (!Array.isArray(subtitles)) {
+      return res.status(400).json({ success: false, error: 'subtitles phải là một mảng' });
+    }
+
+    const subsJson = JSON.stringify(subtitles);
+    const transcript = fullTranscript || subtitles.map((s: any) => s.text).join(' ');
+
+    if (voiceId) {
+      db.prepare(`
+        UPDATE voices 
+        SET subtitles_json = ?, stt_text = ?
+        WHERE id = ?
+      `).run(subsJson, transcript, voiceId);
+    } else {
+      db.prepare(`
+        UPDATE voices 
+        SET subtitles_json = ?, stt_text = ?
+        WHERE file_path = ?
+      `).run(subsJson, transcript, voicePath);
+    }
+
+    res.json({
+      success: true,
+      data: {
+        subtitles,
+        fullTranscript: transcript,
+      },
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// 5c. Phân bổ lại toàn bộ phụ đề từ văn bản tùy chỉnh (Bulk Transcript Editor)
+generatorRouter.post('/resegment-transcript', async (req, res) => {
+  try {
+    const { voicePath, customText, duration } = req.body;
+    if (!voicePath || !customText) {
+      return res.status(400).json({ success: false, error: 'Thiếu voicePath hoặc customText' });
+    }
+
+    const existing: any = db.prepare(`SELECT * FROM voices WHERE file_path = ?`).get(voicePath);
+    const rawWords = existing?.raw_words_json ? JSON.parse(existing.raw_words_json) : [];
+    const totalDur = Number(duration) || existing?.duration || 30.0;
+
+    const newSubtitles = await realignAndSegmentFromCustomText(customText, rawWords, totalDur);
+
+    if (existing) {
+      db.prepare(`
+        UPDATE voices 
+        SET subtitles_json = ?, stt_text = ?
+        WHERE id = ?
+      `).run(JSON.stringify(newSubtitles), customText.trim(), existing.id);
+    }
+
+    res.json({
+      success: true,
+      data: {
+        subtitles: newSubtitles,
+        fullTranscript: customText.trim(),
       },
     });
   } catch (err: any) {

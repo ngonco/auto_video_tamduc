@@ -34,7 +34,7 @@ export async function transcribeAudio(audioFilePath: string): Promise<STTResult>
   formData.append('file', blob, path.basename(audioFilePath));
   formData.append('model', AI_MODELS.STT);
   formData.append('language', 'vi');
-  formData.append('prompt', 'Văn bản tiếng Việt chuẩn chính tả, ngữ pháp, dấu câu, thanh điệu, thơ ca, triết lý nhân sinh, không gian thờ tự, trang nghiêm, tiềm tàng, bủa vây, chở hồn dân tộc, gian khó.');
+  formData.append('prompt', 'Văn bản tiếng Việt chuẩn chính tả, ngữ pháp, dấu câu, thanh điệu, thơ ca, triết lý nhân sinh, không gian thờ tự, trang nghiêm, tiềm tàng, bủa vây, chở hồn dân tộc, gian khó, làm phước.');
   formData.append('response_format', 'verbose_json');
   formData.append('timestamp_granularities[]', 'word');
 
@@ -72,6 +72,11 @@ export async function transcribeAudio(audioFilePath: string): Promise<STTResult>
     // 2. Nếu không có words ở root, kiểm tra seg.words trong từng segment
     if (words.length === 0 && Array.isArray(response.segments) && response.segments.length > 0) {
       for (const seg of response.segments) {
+        // Bỏ qua segment nếu xác suất không có tiếng nói quá cao (no_speech_prob > 0.65)
+        if (seg.no_speech_prob && Number(seg.no_speech_prob) > 0.65) {
+          continue;
+        }
+
         if (Array.isArray(seg.words) && seg.words.length > 0) {
           for (const sw of seg.words) {
             const wText = (sw.word || '').trim();
