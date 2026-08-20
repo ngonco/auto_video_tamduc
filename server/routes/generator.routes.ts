@@ -188,39 +188,41 @@ generatorRouter.delete('/voices/:id', (req, res) => {
   }
 });
 
-// 5. Nhận diện giọng nói STT + Sửa chính tả Phật pháp + Tự động Ghi nhớ Voice
+// 5. Nhận diện giọng nói STT + Sửa chính tả ngữ cảnh bằng AI + Tự động Ghi nhớ Voice
 generatorRouter.post('/process-voice', async (req, res) => {
   try {
-    const { filePath, originalName } = req.body;
+    const { filePath, originalName, forceRefresh } = req.body;
     if (!filePath || !fs.existsSync(filePath)) {
       return res.status(400).json({ success: false, error: 'Đường dẫn file voice không hợp lệ' });
     }
 
-    // Kiểm tra xem voice đã từng được xử lý trong database chưa để trả kết quả ngay (instant cache)
-    const existing: any = db.prepare(`SELECT * FROM voices WHERE file_path = ?`).get(filePath);
-    if (existing && existing.subtitles_json) {
-      const rawWords = existing.raw_words_json ? JSON.parse(existing.raw_words_json) : [];
-      let subs = existing.subtitles_json ? JSON.parse(existing.subtitles_json) : [];
+    // Kiểm tra xem voice đã từng được xử lý trong database chưa để trả kết quả ngay (nếu không yêu cầu forceRefresh)
+    if (!forceRefresh) {
+      const existing: any = db.prepare(`SELECT * FROM voices WHERE file_path = ?`).get(filePath);
+      if (existing && existing.subtitles_json) {
+        const rawWords = existing.raw_words_json ? JSON.parse(existing.raw_words_json) : [];
+        let subs = existing.subtitles_json ? JSON.parse(existing.subtitles_json) : [];
 
-      const lastSubEnd = subs.length > 0 ? subs[subs.length - 1].end : 0;
-      if (rawWords.length > 0 && (subs.length === 0 || (existing.duration > 5 && lastSubEnd < existing.duration * 0.85))) {
-        subs = segmentAndPolishSubtitles(rawWords);
-        try {
-          db.prepare(`UPDATE voices SET subtitles_json = ? WHERE id = ?`).run(JSON.stringify(subs), existing.id);
-        } catch (_) {}
+        const lastSubEnd = subs.length > 0 ? subs[subs.length - 1].end : 0;
+        if (rawWords.length > 0 && (subs.length === 0 || (existing.duration > 5 && lastSubEnd < existing.duration * 0.85))) {
+          subs = segmentAndPolishSubtitles(rawWords);
+          try {
+            db.prepare(`UPDATE voices SET subtitles_json = ? WHERE id = ?`).run(JSON.stringify(subs), existing.id);
+          } catch (_) {}
+        }
+
+        return res.json({
+          success: true,
+          cached: true,
+          data: {
+            id: existing.id,
+            rawText: existing.stt_text,
+            duration: existing.duration,
+            words: rawWords,
+            subtitles: subs,
+          },
+        });
       }
-
-      return res.json({
-        success: true,
-        cached: true,
-        data: {
-          id: existing.id,
-          rawText: existing.stt_text,
-          duration: existing.duration,
-          words: rawWords,
-          subtitles: subs,
-        },
-      });
     }
 
     console.log('[Generator] Starting STT transcription on:', filePath);

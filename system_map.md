@@ -78,8 +78,8 @@ Tất cả các dịch vụ AI kết nối qua API Gateway chuẩn OpenAI SDK (`
 
 | Phân Hệ / Token | Biến Môi Trường | Endpoint | Model Sử Dụng | Nhiệm Vụ Cụ Thể |
 | :--- | :--- | :--- | :--- | :--- |
-| **STT (Voice to Text)** | `VILAO_STT_KEY` | `/audio/transcriptions` | `tsa/groq/whisper-large-v3` | Bóc tách giọng nói tiếng Việt siêu tốc, xuất word timestamps chi tiết từng từ cho Karaoke. |
-| **Sửa Phụ Đề Phật Học** | `VILAO_SUBTITLE_KEY` | `/chat/completions` | `ts/gemini-3.1-flash-lite` | Chuẩn hóa chính tả Phật học (Tam Bảo, Bổn Sư, Quán Âm, trang nghiêm...), ngắt dòng 3-6 từ cho khung dọc 9:16. |
+| **STT (Voice to Text)** | `VILAO_STT_KEY` | `/audio/transcriptions` | `tsa/groq/whisper-large-v3` | Bóc tách giọng nói tiếng Việt siêu tốc kèm initial `prompt` định hướng ngữ cảnh chuẩn âm học, xuất word timestamps chi tiết từng từ cho Karaoke. |
+| **Sửa Phụ Đề Ngữ Cảnh AI** | `VILAO_SUBTITLE_KEY` | `/chat/completions` | `ts/gemini-3.1-flash-lite` | Kiểm tra & sửa lỗi sai âm, nhầm thanh điệu, sai vần tiếng Việt theo ngữ cảnh câu văn (tiềm tàng, bủa vây, dân tộc, dù/dẫu...) và thuật toán Word-Alignment bảo toàn 100% mốc thời gian Karaoke. |
 | **Phân Tích Cảnh (Vision)** | `VILAO_EMBEDDING_KEY` | `/chat/completions` | `ts/gemini-3.1-flash-lite` | Nhận diện 4 giai đoạn thi công bàn thờ từ 2 frame ảnh đại diện JPEG (KHÔNG GỬI VIDEO). |
 | **Vector Embedding** | `VILAO_EMBEDDING_KEY` | `/embeddings` | `emb/text-embedding-3-large` | Nhúng vector mô tả cảnh khi cần tìm kiếm ngữ nghĩa. |
 
@@ -110,8 +110,11 @@ Tổng thời lượng Video = Thời lượng Voice chính xác (T giây từ f
 
 * Quy Tắc Đồng Bộ Thời Gian & Tránh Lệch / Thiếu Video & Phụ Đề So Với Voice:
   1. Thời lượng Voice: Luôn đo đạc bằng ffprobe (VideoMetadata) để lấy chính xác 100% độ dài audio, không bị cụt đuôi do khoảng lặng cuối câu.
-  2. Phân đoạn Phụ đề & Đồng Bộ Karaoke (Subtitle Sync Engine):
-     - Phân dòng trực tiếp từ chuỗi KaraokeWord[] của Whisper, bảo toàn 100% từ ngữ gốc, mốc thời gian start-end của từng từ. Ngắt dòng thông minh 3-6 từ theo khoảng lặng âm thanh (>= 0.3s) cho khung dọc 9:16.
+  2. Phân đoạn Phụ đề & Đồng Bộ Karaoke 2 Tầng (2-Layer AI Contextual Spell-Check & Word-Alignment Engine):
+     - **Tầng 1 (Whisper Initial Prompt)**: Truyền prompt tiếng Việt giàu ngữ cảnh để Whisper định hướng âm học chính xác ngay từ đầu, hạn chế tối đa nhầm lẫn dấu và phụ âm.
+     - **Tầng 2 (Gemini Contextual AI Spell-Check)**: Gửi văn bản STT qua `ts/gemini-3.1-flash-lite` với system prompt chuyên sâu về tiếng Việt, phân tích ngữ nghĩa toàn câu để phát hiện và sửa các lỗi sai âm (như *tìm tàn* ➔ *tiềm tàng*, *mũa vây* ➔ *bủa vây*, *dâng tộc đừng* ➔ *dân tộc đứng*, *cùng dũ* ➔ *cùng dù/dẫu*...).
+     - **Tầng 3 (Word-Alignment & Time Interpolation Engine)**: Thuật toán so khớp chuỗi ánh xạ trực tiếp các từ đã sửa vào mảng `KaraokeWord[]` gốc, bảo toàn 100% mốc thời gian `start`, `end`. Khi 1 từ tách thành N từ hoặc N từ gộp thành 1 từ, hệ thống tự động nội suy thời lượng để không làm lệch nhịp Karaoke.
+     - **Tầng 4 (Giao diện Sửa Nhanh Subtitle Inline UI)**: Cho phép xem trực quan các dòng phụ đề, click sửa nhanh trực tiếp trên Wizard hoặc chạy lại AI sửa chính tả chỉ với 1 click.
      - Đồng bộ 100% giữa Preview & Video xuất ra (FFmpeg ASS):
        + Chữ hiển thị: Viết IN HOA toàn bộ (UPPERCASE), trang nghiêm, dễ đọc.
        + Hiệu ứng Karaoke: Chữ chưa đọc màu Trắng (#FFFFFF / &H00FFFFFF), khi giọng đọc tới đâu đổi sang màu Vàng Kim (#FFD700 / &H0000D7FF) tới đó kèm viền đen 3.5px và đổ bóng sắc nét.
@@ -119,7 +122,6 @@ Tổng thời lượng Video = Thời lượng Voice chính xác (T giây từ f
        + Kích thước & Vị trí chuẩn: Mặc định cỡ chữ 65px (thay vì 50px cũ bị nhỏ), căn lề đáy 22% (~422px từ đáy 1080x1920) chuẩn safe zone 9:16.
        + Tùy chỉnh trực quan & Ghi nhớ vĩnh viễn (Timeline Subtitle Controls): Bộ thanh trượt điều chỉnh Cỡ chữ (40px - 90px) và Vị trí lề đáy (12% - 35%) ngay trên Bảng điều khiển Timeline Editor; cập nhật trực tiếp thời gian thực trên Preview và tự động lưu vào localStorage / render payload để video xuất ra khớp tuyệt đối 1:1.
        + Xử lý khoảng lặng: Tự động chèn thẻ {\k<gap>} trong file ASS để khớp tuyệt đối từng nhịp ngắt nghỉ của giọng Voice.
-  3. Chuẩn hóa Danh xưng Phật giáo: Tự động viết hoa các danh từ tôn kính (Phật, Đức Phật, Tam Bảo, Bồ Tát, Thế Tôn, Như Lai, Bổn Sư, Thích Ca, Quán Thế Âm, A Di Đà, Chư Phật, Gia Hộ, Cúng Dường, Phụng Sự...) và giữ chữ thường cho các liên từ nối.
   4. Storyline & Clip Duration Engine (Chuẩn 4.0s - 5.5s):
      - Mọi video nguồn dài (30s, 60s,...) khi nạp vào timeline đều được tự động bóc tách thành các phân đoạn 4.0s - 5.5s.
      - Thuật toán tịnh tiến `sourceStart` lấy các góc quay mới liên tục trong video gốc, không bị lặp hình.

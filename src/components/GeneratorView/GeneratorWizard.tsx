@@ -14,7 +14,11 @@ import {
   Trash2,
   FolderOpen,
   Play,
-  Volume2
+  Volume2,
+  Edit2,
+  Check,
+  X,
+  Wand2
 } from 'lucide-react';
 import { SubtitleLine } from '../../remotion/types.js';
 
@@ -78,6 +82,8 @@ export const GeneratorWizard: React.FC<GeneratorWizardProps> = ({
   const [processingSTT, setProcessingSTT] = useState(false);
   const [subtitles, setSubtitles] = useState<SubtitleLine[]>([]);
   const [fullTranscript, setFullTranscript] = useState<string>('');
+  const [editingSubIdx, setEditingSubIdx] = useState<number | null>(null);
+  const [editingSubText, setEditingSubText] = useState<string>('');
 
   // Storyline assembly
   const [assembling, setAssembling] = useState(false);
@@ -180,7 +186,7 @@ export const GeneratorWizard: React.FC<GeneratorWizardProps> = ({
   };
 
   // 3. Xử lý STT & Subtitle
-  const processVoiceFile = async (filePathToProcess: string, fileName?: string) => {
+  const processVoiceFile = async (filePathToProcess: string, fileName?: string, forceRefresh = false) => {
     if (!filePathToProcess) return;
 
     try {
@@ -192,6 +198,7 @@ export const GeneratorWizard: React.FC<GeneratorWizardProps> = ({
         body: JSON.stringify({
           filePath: filePathToProcess,
           originalName: fileName || voiceName,
+          forceRefresh,
         }),
       });
 
@@ -209,6 +216,42 @@ export const GeneratorWizard: React.FC<GeneratorWizardProps> = ({
     } finally {
       setProcessingSTT(false);
     }
+  };
+
+  // Xử lý chỉnh sửa nhanh 1 dòng phụ đề
+  const handleStartEditSub = (idx: number, currentText: string) => {
+    setEditingSubIdx(idx);
+    setEditingSubText(currentText);
+  };
+
+  const handleSaveEditSub = (idx: number) => {
+    if (editingSubIdx === null) return;
+    const trimmed = editingSubText.trim();
+    if (!trimmed) return;
+
+    const newSubs = [...subtitles];
+    const targetSub = newSubs[idx];
+    if (targetSub) {
+      const words = trimmed.split(/\s+/).filter(Boolean);
+      const wordDur = Math.max(0.05, targetSub.end - targetSub.start) / words.length;
+      newSubs[idx] = {
+        ...targetSub,
+        text: trimmed,
+        words: words.map((w, wIdx) => ({
+          word: w,
+          start: Number((targetSub.start + wIdx * wordDur).toFixed(2)),
+          end: Number((targetSub.start + (wIdx + 1) * wordDur).toFixed(2)),
+        })),
+      };
+      setSubtitles(newSubs);
+    }
+    setEditingSubIdx(null);
+    setEditingSubText('');
+  };
+
+  const handleCancelEditSub = () => {
+    setEditingSubIdx(null);
+    setEditingSubText('');
   };
 
   // 4. Chọn Voice từ Lịch sử Đã Nạp
@@ -465,22 +508,97 @@ export const GeneratorWizard: React.FC<GeneratorWizardProps> = ({
           {/* Hiển Thị Subtitle Đã Xử Lý */}
           {subtitles.length > 0 && (
             <div className="mt-4 p-4 bg-slate-900/90 rounded-xl border border-amber-500/20 text-xs">
-              <div className="flex items-center justify-between mb-2 pb-2 border-b border-slate-800">
-                <span className="font-bold text-amber-300 flex items-center gap-1.5">
-                  <FileText className="w-3.5 h-3.5" />
-                  Phụ Đề Đã Chuẩn Hóa ({subtitles.length} dòng • {voiceDuration.toFixed(1)}s):
-                </span>
-                <span className="text-[10px] text-emerald-400 font-mono">Word Timestamps Ready</span>
+              <div className="flex flex-wrap items-center justify-between gap-2 mb-2 pb-2 border-b border-slate-800">
+                <div className="flex items-center gap-2">
+                  <span className="font-bold text-amber-300 flex items-center gap-1.5">
+                    <FileText className="w-3.5 h-3.5" />
+                    Phụ Đề Đã Chuẩn Hóa ({subtitles.length} dòng • {voiceDuration.toFixed(1)}s):
+                  </span>
+                  <span className="text-[10px] bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-1.5 py-0.5 rounded font-mono">
+                    AI Spell-Checked
+                  </span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => processVoiceFile(voicePath, voiceName, true)}
+                    disabled={processingSTT}
+                    className="flex items-center gap-1 px-2 py-1 bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border border-amber-500/30 rounded text-[11px] font-medium transition disabled:opacity-50"
+                    title="Chạy lại Gemini 3.1 Flash Lite để sửa chính tả ngữ cảnh"
+                  >
+                    <Wand2 className={`w-3 h-3 ${processingSTT ? 'animate-spin' : ''}`} />
+                    {processingSTT ? 'Đang sửa AI...' : 'Chạy Lại Sửa AI'}
+                  </button>
+                  <span className="text-[10px] text-slate-400 font-mono">Word Timestamps Ready</span>
+                </div>
               </div>
-              <div className="max-h-36 overflow-y-auto space-y-1 pr-2">
-                {subtitles.map((sub, i) => (
-                  <div key={i} className="flex gap-2 text-[11px] text-slate-300">
-                    <span className="text-slate-500 font-mono w-16 flex-shrink-0">
-                      {sub.start.toFixed(1)}s - {sub.end.toFixed(1)}s:
-                    </span>
-                    <span className="font-medium text-slate-200">{sub.text}</span>
-                  </div>
-                ))}
+
+              <div className="max-h-48 overflow-y-auto space-y-1.5 pr-2">
+                {subtitles.map((sub, i) => {
+                  const isEditing = editingSubIdx === i;
+                  return (
+                    <div
+                      key={i}
+                      className={`p-1.5 rounded-lg transition ${
+                        isEditing
+                          ? 'bg-amber-500/10 border border-amber-500/40'
+                          : 'hover:bg-slate-800/60 flex items-center justify-between gap-2'
+                      }`}
+                    >
+                      {isEditing ? (
+                        <div className="flex items-center gap-2 w-full">
+                          <span className="text-slate-500 font-mono text-[10px] w-14 flex-shrink-0">
+                            {sub.start.toFixed(1)}s:
+                          </span>
+                          <input
+                            type="text"
+                            value={editingSubText}
+                            onChange={(e) => setEditingSubText(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') handleSaveEditSub(i);
+                              if (e.key === 'Escape') handleCancelEditSub();
+                            }}
+                            autoFocus
+                            className="flex-1 bg-slate-950 border border-amber-500/50 rounded px-2 py-1 text-xs text-slate-100 focus:outline-none focus:border-amber-400"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => handleSaveEditSub(i)}
+                            className="p-1 bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30 rounded"
+                            title="Lưu (Enter)"
+                          >
+                            <Check className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={handleCancelEditSub}
+                            className="p-1 bg-slate-800 text-slate-400 hover:bg-slate-700 rounded"
+                            title="Hủy (Esc)"
+                          >
+                            <X className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      ) : (
+                        <>
+                          <div className="flex gap-2 text-[11px] text-slate-300 flex-1 min-w-0">
+                            <span className="text-slate-500 font-mono w-14 flex-shrink-0">
+                              {sub.start.toFixed(1)}s - {sub.end.toFixed(1)}s:
+                            </span>
+                            <span className="font-medium text-slate-200 truncate">{sub.text}</span>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => handleStartEditSub(i, sub.text)}
+                            className="opacity-0 group-hover:opacity-100 hover:opacity-100 p-1 text-slate-400 hover:text-amber-300 rounded transition flex-shrink-0"
+                            title="Nhấp để sửa nhanh dòng này"
+                          >
+                            <Edit2 className="w-3 h-3" />
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             </div>
           )}

@@ -34,6 +34,7 @@ export async function transcribeAudio(audioFilePath: string): Promise<STTResult>
   formData.append('file', blob, path.basename(audioFilePath));
   formData.append('model', AI_MODELS.STT);
   formData.append('language', 'vi');
+  formData.append('prompt', 'Văn bản tiếng Việt chuẩn chính tả, ngữ pháp, dấu câu, thanh điệu, thơ ca, triết lý nhân sinh, không gian thờ tự, trang nghiêm, tiềm tàng, bủa vây, chở hồn dân tộc, gian khó.');
   formData.append('response_format', 'verbose_json');
   formData.append('timestamp_granularities[]', 'word');
 

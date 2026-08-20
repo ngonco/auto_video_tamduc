@@ -48,8 +48,10 @@ const BUDDHIST_TERMS_MAP = new Map<string, string>([
  * Sửa lỗi chính tả / nhận diện sai âm thường gặp trong khẩu ngữ tiếng Việt
  */
 const SPELLING_CORRECTIONS = new Map<string, string>([
-  ['dân', 'dâng'],      // dân lên -> dâng lên
-  ['lật đặt', 'lật đật'], // lật đặt -> lật đật
+  ['dân lên', 'dâng lên'],
+  ['lật đặt', 'lật đật'],
+  ['mũa vây', 'bủa vây'],
+  ['dâng tộc', 'dân tộc'],
 ]);
 
 /**
@@ -79,11 +81,15 @@ const HANGING_END_WORDS = new Set<string>([
   'thì', 'là', 'và', 'hoặc', 'của', 'để', 'mà', 'với', 'trong', 'ở', 'từ', 'có', 'cho'
 ]);
 
+function cleanWordForCompare(w: string): string {
+  return (w || '').trim().toLowerCase().replace(/[,.;:!?…""''“”‘’()\[\]]+$/, '').replace(/^[,.;:!?…""''“”‘’()\[\]]+/, '');
+}
+
 function formatWord(rawWord: string, isStartOfSentence: boolean, isFirstWordInLine: boolean): string {
   let cleanWord = rawWord.replace(/[,.;:!?]+$/, '');
   let lower = cleanWord.toLowerCase();
 
-  // Sửa lỗi chính tả âm
+  // Sửa lỗi chính tả âm tĩnh
   if (SPELLING_CORRECTIONS.has(lower)) {
     lower = SPELLING_CORRECTIONS.get(lower)!;
   }
@@ -99,6 +105,145 @@ function formatWord(rawWord: string, isStartOfSentence: boolean, isFirstWordInLi
   }
 
   return lower;
+}
+
+/**
+ * Gọi Gemini 3.1 Flash Lite để sửa lỗi chính tả ngữ cảnh tiếng Việt
+ */
+async function fixVietnameseSpellingWithAI(
+  rawText: string,
+  rawWords: KaraokeWord[]
+): Promise<{ correctedWords: KaraokeWord[]; correctedText: string }> {
+  if (!rawWords || rawWords.length === 0) {
+    return { correctedWords: rawWords || [], correctedText: rawText || '' };
+  }
+
+  const promptText = rawText || rawWords.map((w) => w.word).join(' ');
+
+  const systemPrompt = `Bạn là chuyên gia ngôn ngữ học tiếng Việt và biên tập ngữ pháp, chính tả văn phong truyền cảm, thơ ca, triết lý nhân sinh.
+Nhiệm vụ của bạn: Kiểm tra văn bản tiếng Việt được bóc tách từ giọng nói (Speech-to-Text) và SỬA CÁC LỖI SAI CHÍNH TẢ, SAI THANH ĐIỆU (hỏi/ngã, sắc/huyền/nặng), NHẦM LẪN PHỤ ÂM ĐẦU HOẶC VẦN (như b/m, d/gi/r, s/x, tr/ch, iêm/im, an/ang, dâng/dân, đừng/đứng, mũa/bủa, tìm tàn/tiềm tàng, dũ/dù/dẫu...) theo đúng ngữ nghĩa tự nhiên của câu văn.
+
+CÁC QUY TẮC BẮT BUỘC:
+1. CHỈ sửa những từ bị sai âm, sai nghĩa hoặc sai chính tả trong ngữ cảnh. TUYỆT ĐỐI KHÔNG viết lại văn phong, KHÔNG thêm bớt ý nghĩa, KHÔNG thay đổi cấu trúc câu nếu từ gốc đã có nghĩa đúng.
+2. Giữ nguyên tối đa số lượng từ (1 từ thay bằng 1 từ, 2 từ thay bằng 2 từ) để không làm lệch mốc thời gian giọng đọc.
+3. Trả về DUY NHẤT một khối JSON hợp lệ theo cấu trúc sau (không kèm lời giải thích nào khác):
+{
+  "corrected_text": "Toàn bộ văn bản đã sửa đúng chính tả",
+  "corrections": [
+    {"original": "từ_hoặc_cụm_sai", "corrected": "từ_hoặc_cụm_đúng"}
+  ]
+}`;
+
+  try {
+    const aiResponse = await callVilaoChatCompletion({
+      model: AI_MODELS.SUBTITLE_FIX,
+      serviceType: 'SUBTITLE',
+      temperature: 0.1,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: `Văn bản cần kiểm tra và sửa lỗi chính tả:\n"${promptText}"` },
+      ],
+    });
+
+    let parsedResult: { corrected_text?: string; corrections?: Array<{ original: string; corrected: string }> } = {};
+    try {
+      const jsonMatch = aiResponse.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        parsedResult = JSON.parse(jsonMatch[0]);
+      }
+    } catch (parseErr) {
+      console.warn('[SubtitleFixer] Could not parse AI JSON response, falling back:', parseErr);
+    }
+
+    const corrections = Array.isArray(parsedResult.corrections) ? parsedResult.corrections : [];
+    const correctedText = parsedResult.corrected_text || '';
+
+    // Áp dụng thuật toán Word-Alignment & Time Interpolation
+    const alignedWords = alignCorrectedWordsWithTimestamps(rawWords, corrections, correctedText);
+
+    return {
+      correctedWords: alignedWords,
+      correctedText: correctedText || alignedWords.map((w) => w.word).join(' '),
+    };
+  } catch (error: any) {
+    console.error('[SubtitleFixer] Error calling AI spell-check:', error.message);
+    // Fallback an toàn: giữ nguyên từ gốc
+    return { correctedWords: rawWords, correctedText: promptText };
+  }
+}
+
+/**
+ * Thuật toán Word-Alignment & Time Interpolation:
+ * Ánh xạ các từ/cụm từ đã sửa vào mảng KaraokeWord[] gốc để bảo toàn 100% mốc thời gian start & end
+ */
+export function alignCorrectedWordsWithTimestamps(
+  rawWords: KaraokeWord[],
+  corrections: Array<{ original: string; corrected: string }>,
+  correctedText?: string
+): KaraokeWord[] {
+  if (!rawWords || rawWords.length === 0) return [];
+
+  // Tạo bản sao làm việc
+  let workingWords: KaraokeWord[] = rawWords.map((w) => ({ ...w }));
+
+  // Bước 1: Áp dụng danh sách corrections [original -> corrected]
+  for (const corr of corrections) {
+    const origPhrase = cleanWordForCompare(corr.original);
+    const corrPhrase = (corr.corrected || '').trim();
+    if (!origPhrase || !corrPhrase) continue;
+
+    const origTokens = origPhrase.split(/\s+/).filter(Boolean);
+    const corrTokens = corrPhrase.split(/\s+/).filter(Boolean);
+    if (origTokens.length === 0 || corrTokens.length === 0) continue;
+
+    // Tìm vị trí xuất hiện của origTokens trong workingWords
+    for (let i = 0; i <= workingWords.length - origTokens.length; i++) {
+      let match = true;
+      for (let j = 0; j < origTokens.length; j++) {
+        if (cleanWordForCompare(workingWords[i + j].word) !== origTokens[j]) {
+          match = false;
+          break;
+        }
+      }
+
+      if (match) {
+        const start = workingWords[i].start;
+        const end = workingWords[i + origTokens.length - 1].end;
+        const totalDur = Math.max(0.05, end - start);
+
+        // Tạo mảng từ mới thay thế kèm nội suy thời gian
+        const replacementWords: KaraokeWord[] = corrTokens.map((token, k) => {
+          const tokenDur = totalDur / corrTokens.length;
+          return {
+            word: token,
+            start: Number((start + k * tokenDur).toFixed(2)),
+            end: Number((start + (k + 1) * tokenDur).toFixed(2)),
+          };
+        });
+
+        // Thay thế đoạn từ trong workingWords
+        workingWords.splice(i, origTokens.length, ...replacementWords);
+        i += replacementWords.length - 1; // Nhảy qua các từ vừa chèn
+      }
+    }
+  }
+
+  // Bước 2: Đối soát với correctedText nếu số lượng từ bằng nhau (1-to-1 matching)
+  if (correctedText) {
+    const fullCorrTokens = correctedText.trim().split(/\s+/).filter(Boolean);
+    if (fullCorrTokens.length === workingWords.length) {
+      for (let i = 0; i < workingWords.length; i++) {
+        const rawClean = cleanWordForCompare(workingWords[i].word);
+        const corrClean = cleanWordForCompare(fullCorrTokens[i]);
+        // Nếu khác nhau nhưng độ dài tương đồng hoặc là lỗi âm -> áp dụng từ đã sửa
+        if (rawClean !== corrClean && corrClean.length > 0) {
+          workingWords[i].word = fullCorrTokens[i];
+        }
+      }
+    }
+  }
+
+  return workingWords;
 }
 
 /**
@@ -189,7 +334,7 @@ export function segmentAndPolishSubtitles(rawWords: KaraokeWord[]): SubtitleLine
     }
   }
 
-  // Chuẩn hóa ngữ pháp & chính tả Phật giáo cho từng dòng
+  // Chuẩn hóa ngữ pháp & chính tả cho từng dòng
   let isStartOfSentence = true;
   const lines: SubtitleLine[] = rawChunks.map((chunk, lineIdx) => {
     const firstWordClean = chunk[0].word.replace(/[,.;:!?]+$/, '').toLowerCase();
@@ -232,16 +377,20 @@ export function segmentAndPolishSubtitles(rawWords: KaraokeWord[]): SubtitleLine
 }
 
 /**
- * Xử lý chuẩn hóa và ngắt dòng phụ đề chuẩn cho toàn hệ thống
+ * Xử lý chuẩn hóa, sửa lỗi chính tả ngữ cảnh bằng AI và ngắt dòng phụ đề chuẩn cho toàn hệ thống
  */
 export async function polishAndSegmentSubtitles(
-  _rawText: string,
+  rawText: string,
   rawWords: KaraokeWord[]
 ): Promise<SubtitleLine[]> {
   if (!rawWords || rawWords.length === 0) {
     return [];
   }
 
-  // Sử dụng thuật toán phân đoạn trực tiếp từ rawWords để đảm bảo 100% mốc thời gian và không mất từ
-  return segmentAndPolishSubtitles(rawWords);
+  console.log('[SubtitleFixer] Running Gemini contextual spell-check on', rawWords.length, 'words...');
+  const { correctedWords } = await fixVietnameseSpellingWithAI(rawText, rawWords);
+
+  // Phân đoạn dòng phụ đề 3-6 từ cho 9:16
+  return segmentAndPolishSubtitles(correctedWords);
 }
+
