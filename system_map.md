@@ -122,11 +122,18 @@ Tổng thời lượng Video = Thời lượng Voice chính xác (T giây từ f
        + Kích thước & Vị trí chuẩn: Mặc định cỡ chữ 65px (thay vì 50px cũ bị nhỏ), căn lề đáy 22% (~422px từ đáy 1080x1920) chuẩn safe zone 9:16.
        + Tùy chỉnh trực quan & Ghi nhớ vĩnh viễn (Timeline Subtitle Controls): Bộ thanh trượt điều chỉnh Cỡ chữ (40px - 90px) và Vị trí lề đáy (12% - 35%) ngay trên Bảng điều khiển Timeline Editor; cập nhật trực tiếp thời gian thực trên Preview và tự động lưu vào localStorage / render payload để video xuất ra khớp tuyệt đối 1:1.
        + Xử lý khoảng lặng: Tự động chèn thẻ {\k<gap>} trong file ASS để khớp tuyệt đối từng nhịp ngắt nghỉ của giọng Voice.
-  4. Storyline & Clip Duration Engine (Chuẩn 4.0s - 5.5s):
-     - Mọi video nguồn dài (30s, 60s,...) khi nạp vào timeline đều được tự động bóc tách thành các phân đoạn 4.0s - 5.5s.
-     - Thuật toán tịnh tiến `sourceStart` lấy các góc quay mới liên tục trong video gốc, không bị lặp hình.
-     - Trên Timeline Editor: Khi xóa clip hoặc bấm "Cắt Chuẩn 4-6s", hệ thống kích hoạt `rebalanceClips` và `recalcTimelinePositions` tự cân bằng và phân bổ lại các clip thân chính xác trong phạm vi thời lượng Voice (0 -> voiceDuration); khối Outro nằm riêng biệt từ voiceDuration -> totalDuration, đảm bảo thanh playhead chạm đúng khối Outro ngay khi video preview bắt đầu phát Outro.
-  5. Remotion Player Preview: Sử dụng thẻ <Video> chuẩn Remotion với giải mã phần cứng GPU (Hardware Acceleration) kết hợp <Sequence> độc lập cho từng clip kèm startFrom={clip.sourceStart * fps} để preview siêu mượt 60fps, loại bỏ hoàn toàn tình trạng giựt hình do Canvas seek.
+  3. Storyline & Clip Duration Engine (Chuẩn 4.0s - 5.5s & 2 Chế Độ Lắp Ráp Nguồn):
+     - **2 Chế độ chọn Source**:
+       + **Chế độ 1 (1 Công trình cụ thể - Single Mode)**: Phân bổ clip 4 giai đoạn từ 1 thư mục công trình được chọn.
+       + **Chế độ 2 (Toàn bộ thư viện - All Projects Smart Mix Mode)**: Tự động tổng hợp và chọn lọc footage tối ưu từ tất cả các công trình trong database.
+     - **Thuật toán chống trùng lặp vừa phải & Usage Memory**:
+       + Ưu tiên Video trước, chỉ bổ sung Ảnh tĩnh (kèm Ken Burns) khi thiếu video ở giai đoạn tương ứng.
+       + Ưu tiên các footage có `usage_count` thấp nhất (chưa dùng hoặc ít dùng) và `aesthetic_score` cao nhất để video luôn tươi mới.
+       + Luân phiên các công trình khác nhau giữa các clip liên tiếp (tránh 2 clip cùng 1 công trình khi có nhiều công trình).
+       + Cấm 2 clip liên tiếp chọn cùng 1 file nguồn.
+       + Thuật toán tịnh tiến `sourceStart` khi tái sử dụng video dài để lấy các góc quay mới liên tục, không bị lặp hình.
+     - Trên Timeline Editor: Khi xóa clip hoặc bấm "Cắt Chuẩn 4-6s", hệ thống kích hoạt `rebalanceClips` và `recalcTimelinePositions` tự cân bằng và phân bổ lại các clip thân chính xác trong phạm vi thời lượng Voice (0 -> voiceDuration); khối Outro nằm riêng biệt từ voiceDuration -> totalDuration.
+  4. Remotion Player Preview: Sử dụng thẻ <Video> chuẩn Remotion với giải mã phần cứng GPU (Hardware Acceleration) kết hợp <Sequence> độc lập cho từng clip kèm startFrom={clip.sourceStart * fps} để preview siêu mượt 60fps, loại bỏ hoàn toàn tình trạng giựt hình do Canvas seek.
   6. Timeline Zoom & Fit Engine: Dải Zoom mở rộng 0.05x -> 6.0x, nút "Fit Toàn Bộ" tính toán chính xác tỷ lệ màn hình để hiển thị trọn vẹn toàn bộ timeline mà không bị thanh cuộn ngang, thẻ clip co giãn mượt mà.
   7. FFmpeg Render: Kích hoạt -stream_loop -1 cho video clips ngắn để không bị hụt khung hình; thêm tpad=stop_mode=clone để giữ khung hình cuối trang nghiêm đến khi dứt tiếng.
   8. Hiệu ứng Chuyển cảnh (Cross Dissolve): 0.5s hòa tan mượt mà giữa các clip liền kề.
@@ -155,24 +162,9 @@ Tổng thời lượng Video = Thời lượng Voice chính xác (T giây từ f
   16. Chuẩn Hóa Cơ Chế Mở Hộp Thoại File/Folder Windows (Native PowerShell Pickers Architecture):
        - **Quy tắc vàng khi gọi PowerShell UI**:
          + Bắt buộc có cờ `-STA` (Single-Threaded Apartment) và `-NoProfile -ExecutionPolicy Bypass` khi gọi `powershell.exe`.
-         + Bắt buộc khởi tạo Form ẩn với:
-           ```powershell
-           $form = New-Object System.Windows.Forms.Form
-           $form.TopMost = $true
-           $form.ShowInTaskbar = $true
-           $form.StartPosition = [System.Windows.Forms.FormStartPosition]::CenterScreen
-           $form.WindowState = [System.Windows.Forms.FormWindowState]::Normal
-           $result = $dlg.ShowDialog($form)
-           ```
-           để đảm bảo hộp thoại OpenFileDialog luôn nổi lên trên cùng màn hình (TopMost), không bị mở ngầm/ẩn phía sau trình duyệt hoặc IDE gây cảm giác bấm nút không phản hồi.
-         + Bắt buộc xử lý `InitialDir` thông minh: Nếu tham số truyền vào là đường dẫn file thì dùng `[System.IO.Path]::GetDirectoryName($InitialDir)` để mở ngay lập tức tại thư mục đó.
-         + Bắt buộc thiết lập mã hóa đầu ra UTF-8:
-           ```powershell
-           [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
-           $OutputEncoding = [System.Text.Encoding]::UTF8
-           ```
-           để bảo toàn 100% đường dẫn chứa ký tự tiếng Việt có dấu và khoảng trắng.
-```
+         + Bắt buộc khởi tạo Form ẩn với `$form.TopMost = $true`, `$form.ShowInTaskbar = $true`, `$form.StartPosition = CenterScreen` để đảm bảo hộp thoại luôn nổi lên trên cùng màn hình.
+         + Xử lý `InitialDir` thông minh tự động nhận diện thư mục cha nếu là file path.
+         + Mã hóa UTF-8 cho console để bảo toàn đường dẫn tiếng Việt có dấu.
 
 ---
 
@@ -191,7 +183,7 @@ CREATE TABLE projects (
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
--- 2. Quản lý từng Clip Video
+-- 2. Quản lý từng Clip Video / Ảnh
 CREATE TABLE video_sources (
     id TEXT PRIMARY KEY,
     project_id TEXT NOT NULL,
@@ -202,6 +194,70 @@ CREATE TABLE video_sources (
     height INTEGER DEFAULT 0,
     aspect_ratio_type TEXT DEFAULT '9:16', -- '9:16', '16:9', 'other'
     stage TEXT DEFAULT 'STAGE_2_ASSEMBLY_FINISHING',
+    aesthetic_score REAL DEFAULT 7.5,
+    scene_description TEXT,
+    thumbnail_path TEXT,
+    is_analyzed INTEGER DEFAULT 0,
+    usage_count INTEGER DEFAULT 0, -- Số lần clip đã được chọn vào video
+    last_used_at DATETIME,         -- Thời điểm gần nhất được sử dụng
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE
+);
+
+-- 3. Quản lý Video Đã Dựng & Timeline State
+CREATE TABLE generated_videos (
+    id TEXT PRIMARY KEY,
+    project_id TEXT,
+    project_name TEXT,
+    voice_path TEXT,
+    voice_duration REAL DEFAULT 0,
+    output_path TEXT,
+    status TEXT DEFAULT 'draft', -- 'draft', 'rendering', 'completed', 'error'
+    timeline_data_json TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 4. Bảng lưu cấu hình người dùng
+CREATE TABLE system_settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 5. Bảng ghi nhớ danh sách Voice đã nạp (Lịch sử Voice)
+CREATE TABLE voices (
+    id TEXT PRIMARY KEY,
+    file_name TEXT NOT NULL,
+    file_path TEXT NOT NULL UNIQUE,
+    duration REAL DEFAULT 0,
+    stt_text TEXT,
+    raw_words_json TEXT,
+    subtitles_json TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+```
+
+---
+
+## 6. DANH MỤC API ROUTES (BACKEND ENDPOINTS)
+
+| Method | Endpoint | Tham Số (Body/Query) | Mô Tả |
+| :--- | :--- | :--- | :--- |
+| `GET` | `/api/library/projects` | - | Lấy danh sách tất cả các công trình và tổng số video |
+| `GET` | `/api/library/projects/:id/videos` | - | Lấy danh sách clip chi tiết của 1 công trình |
+| `POST` | `/api/library/pick-and-import` | `{ initialPath?: string }` | Mở hộp thoại chọn thư mục công trình Windows & tự động phân tích AI |
+| `POST` | `/api/library/import-path` | `{ folderPath: string }` | Nhập thư mục công trình từ đường dẫn & tự động phân tích AI |
+| `POST` | `/api/library/projects/:id/scan` | - | Kích hoạt quét và nhúng AI chạy nền cho 1 công trình (xử lý song song 4 luồng) |
+| `GET` | `/api/library/projects/:id/scan-status` | - | Lấy tiến độ % quét và phân tích AI thời gian thực của công trình |
+| `DELETE`| `/api/library/projects/:id` | - | Xóa 1 công trình và các video liên quan khỏi thư viện |
+| `GET` | `/api/generator/voices` | - | Lấy danh sách voice đã nạp và lưu trong lịch sử SQLite |
+| `POST` | `/api/generator/pick-voice` | `{ initialDir?: string }` | Mở hộp thoại Windows chọn file Voice âm thanh (.mp3, .wav, .m4a) qua `audio-picker.ps1` |
+| `POST` | `/api/generator/pick-media` | `{ initialDir?: string }` | Mở hộp thoại Windows chọn file Video hoặc Ảnh (.mp4, .mov, .jpg, .png...) thay thế clip qua `media-picker.ps1` |
+| `DELETE`| `/api/generator/voices/:id` | - | Xóa voice khỏi danh sách lịch sử |
+| `POST` | `/api/generator/upload-voice` | FormData (`file`) | Tải lên file Voice (.mp3, .wav, .m4a) qua web |
+| `POST` | `/api/generator/process-voice` | `{ filePath, duration, forceRefresh? }` | Nhận diện STT Whisper + Gemini sửa phụ đề & tự động lưu lịch sử |
+| `GET` | `/api/generator/library-summary` | - | Lấy thống kê tổng quan thư viện (tổng số công trình, clips, thời lượng) |
+| `POST` | `/api/generator/assemble-storyline`| `{ targetDuration, mode?: 'single' \| 'all', projectId?, outro? }` | Tự động phân bổ clip 4 giai đoạn theo chế độ 1 công trình hoặc toàn bộ thư viện (kèm chống trùng lặp vừa phải & Usage Memory) |EFAULT 'STAGE_2_ASSEMBLY_FINISHING',
     aesthetic_score REAL DEFAULT 7.5,
     scene_description TEXT,
     thumbnail_path TEXT,

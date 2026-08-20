@@ -18,7 +18,12 @@ import {
   Edit2,
   Check,
   X,
-  Wand2
+  Wand2,
+  Globe,
+  Layers,
+  Database,
+  Film,
+  Shuffle
 } from 'lucide-react';
 import { SubtitleLine } from '../../remotion/types.js';
 
@@ -64,9 +69,16 @@ export const GeneratorWizard: React.FC<GeneratorWizardProps> = ({
   initialProjectId,
   onStorylineGenerated,
 }) => {
-  // Projects
+  // Projects & Source Mode
   const [projects, setProjects] = useState<ProjectItem[]>([]);
   const [selectedProjectId, setSelectedProjectId] = useState<string>(initialProjectId || '');
+  const [sourceMode, setSourceMode] = useState<'all' | 'single'>('all');
+  const [librarySummary, setLibrarySummary] = useState<{
+    totalProjects: number;
+    totalSources: number;
+    totalDuration: number;
+    stageStats?: any[];
+  } | null>(null);
 
   // Saved voices history
   const [savedVoices, setSavedVoices] = useState<SavedVoiceItem[]>([]);
@@ -89,7 +101,7 @@ export const GeneratorWizard: React.FC<GeneratorWizardProps> = ({
   const [assembling, setAssembling] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string>('');
 
-  // Load projects & saved voices
+  // Load projects & library summary & saved voices
   const fetchProjects = () => {
     fetch('/api/library/projects')
       .then((res) => res.json())
@@ -101,6 +113,17 @@ export const GeneratorWizard: React.FC<GeneratorWizardProps> = ({
           }
         }
       });
+  };
+
+  const fetchLibrarySummary = () => {
+    fetch('/api/generator/library-summary')
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.success) {
+          setLibrarySummary(data.data);
+        }
+      })
+      .catch(() => {});
   };
 
   const fetchSavedVoices = () => {
@@ -117,12 +140,14 @@ export const GeneratorWizard: React.FC<GeneratorWizardProps> = ({
 
   useEffect(() => {
     fetchProjects();
+    fetchLibrarySummary();
     fetchSavedVoices();
   }, []);
 
   useEffect(() => {
     if (initialProjectId) {
       setSelectedProjectId(initialProjectId);
+      setSourceMode('single');
     }
   }, [initialProjectId]);
 
@@ -281,8 +306,8 @@ export const GeneratorWizard: React.FC<GeneratorWizardProps> = ({
 
   // 6. Lắp ráp Storyline & Mở Timeline Editor
   const handleAssembleStoryline = async () => {
-    if (!selectedProjectId) {
-      setErrorMsg('Vui lòng chọn 1 Folder công trình');
+    if (sourceMode === 'single' && !selectedProjectId) {
+      setErrorMsg('Vui lòng chọn 1 Folder công trình hoặc chuyển sang chế độ Tự Động Tổng Hợp');
       return;
     }
     if (subtitles.length === 0 || voiceDuration === 0 || !voicePath) {
@@ -298,18 +323,24 @@ export const GeneratorWizard: React.FC<GeneratorWizardProps> = ({
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          projectId: selectedProjectId,
+          mode: sourceMode,
+          projectId: sourceMode === 'single' ? selectedProjectId : undefined,
           targetDuration: voiceDuration,
         }),
       });
 
       const data = await res.json();
       if (data.success) {
-        const projName = projects.find((p) => p.id === selectedProjectId)?.folder_name || 'CongTrinh_TamDuc';
+        let projName = 'ToanBoThuVien_TamDuc';
+        if (sourceMode === 'single') {
+          projName = projects.find((p) => p.id === selectedProjectId)?.folder_name || 'CongTrinh_TamDuc';
+        } else {
+          projName = 'TongHop_ToanBoThuVien';
+        }
         const voiceUrl = `/media/stream?path=${encodeURIComponent(voicePath)}`;
 
         onStorylineGenerated({
-          projectId: selectedProjectId,
+          projectId: sourceMode === 'single' ? selectedProjectId : 'ALL_PROJECTS',
           projectName: projName,
           voicePath,
           voiceUrl,
@@ -604,54 +635,175 @@ export const GeneratorWizard: React.FC<GeneratorWizardProps> = ({
           )}
         </div>
 
-        {/* BƯỚC 2: CHỌN FOLDER CÔNG TRÌNH */}
+        {/* BƯỚC 2: CHỌN NGUỒN FOOTAGE CÔNG TRÌNH */}
         <div className="bg-[#151D2E] border border-slate-800 rounded-2xl p-6 shadow-xl">
-          <div className="flex items-center gap-3 mb-4">
-            <span className="w-7 h-7 rounded-full bg-amber-500 text-slate-950 font-bold text-xs flex items-center justify-center">
-              2
-            </span>
-            <h3 className="font-bold text-slate-100 text-sm font-montserrat">
-              Chọn Thư Mục Source Công Trình Làm Bàn Thờ Phật
-            </h3>
+          <div className="flex flex-wrap items-center justify-between gap-4 mb-5">
+            <div className="flex items-center gap-3">
+              <span className="w-7 h-7 rounded-full bg-amber-500 text-slate-950 font-bold text-xs flex items-center justify-center">
+                2
+              </span>
+              <div>
+                <h3 className="font-bold text-slate-100 text-sm font-montserrat">
+                  Chọn Nguồn Footage Cho Video
+                </h3>
+                <p className="text-[11px] text-slate-400">
+                  Lựa chọn 1 công trình riêng biệt hoặc để AI tự động chọn lọc từ toàn bộ thư viện
+                </p>
+              </div>
+            </div>
+
+            {/* TAB CHỌN CHẾ ĐỘ */}
+            <div className="flex bg-slate-950/80 p-1 rounded-xl border border-slate-800">
+              <button
+                type="button"
+                onClick={() => setSourceMode('all')}
+                className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-bold transition ${
+                  sourceMode === 'all'
+                    ? 'bg-amber-500 text-slate-950 shadow-md shadow-amber-500/20'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                <Globe className="w-3.5 h-3.5" />
+                Toàn Bộ Thư Viện (Trộn AI)
+              </button>
+              <button
+                type="button"
+                onClick={() => setSourceMode('single')}
+                className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-bold transition ${
+                  sourceMode === 'single'
+                    ? 'bg-amber-500 text-slate-950 shadow-md shadow-amber-500/20'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                <Folder className="w-3.5 h-3.5" />
+                1 Công Trình Cụ Thể
+              </button>
+            </div>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            {projects.map((proj) => {
-              const isSelected = selectedProjectId === proj.id;
-              return (
-                <div
-                  key={proj.id}
-                  onClick={() => setSelectedProjectId(proj.id)}
-                  className={`p-3.5 rounded-xl border cursor-pointer transition flex items-center justify-between ${
-                    isSelected
-                      ? 'bg-amber-500/15 border-amber-500/60 shadow-md shadow-amber-500/10'
-                      : 'bg-slate-900/60 border-slate-800 hover:border-slate-700'
-                  }`}
-                >
-                  <div className="flex items-center gap-3">
-                    <Folder className={`w-5 h-5 ${isSelected ? 'text-amber-400' : 'text-slate-500'}`} />
-                    <div>
-                      <p className={`text-xs font-bold line-clamp-1 ${isSelected ? 'text-amber-300' : 'text-slate-200'}`}>
-                        {proj.folder_name}
-                      </p>
-                      <p className="text-[11px] text-slate-400">
-                        {proj.total_videos} videos {proj.is_embedded ? '• Đã Nhúng AI' : ''}
-                      </p>
+          {/* CHẾ ĐỘ 1: TOÀN BỘ THƯ VIỆN (SMART MIX) */}
+          {sourceMode === 'all' && (
+            <div className="bg-gradient-to-br from-slate-900/90 via-slate-900/60 to-amber-950/20 border border-amber-500/30 rounded-2xl p-5 shadow-lg">
+              <div className="flex flex-wrap items-center justify-between gap-3 pb-4 mb-4 border-b border-slate-800">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-9 h-9 rounded-xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-center text-amber-400">
+                    <Shuffle className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h4 className="text-xs font-bold text-amber-300 font-montserrat flex items-center gap-2">
+                      Tự Động Lọc & Trộn Thông Minh Đa Chiều
+                      <span className="text-[10px] bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 px-1.5 py-0.5 rounded font-mono">
+                        Anti-Repetition Active
+                      </span>
+                    </h4>
+                    <p className="text-[11px] text-slate-400">
+                      Thuật toán phân bổ tự động theo 4 giai đoạn tiến trình không gian thờ và chống trùng lặp góc máy.
+                    </p>
+                  </div>
+                </div>
+
+                {librarySummary && (
+                  <div className="flex items-center gap-3 text-xs bg-slate-950/60 px-3 py-2 rounded-xl border border-slate-800">
+                    <div className="text-center px-2">
+                      <p className="text-[10px] text-slate-500 font-mono">Công trình</p>
+                      <p className="font-bold text-amber-300">{librarySummary.totalProjects}</p>
+                    </div>
+                    <div className="w-px h-6 bg-slate-800" />
+                    <div className="text-center px-2">
+                      <p className="text-[10px] text-slate-500 font-mono">Tổng Clip/Ảnh</p>
+                      <p className="font-bold text-emerald-400">{librarySummary.totalSources}</p>
+                    </div>
+                    <div className="w-px h-6 bg-slate-800" />
+                    <div className="text-center px-2">
+                      <p className="text-[10px] text-slate-500 font-mono">Thời lượng</p>
+                      <p className="font-bold text-cyan-300">{librarySummary.totalDuration}s</p>
                     </div>
                   </div>
+                )}
+              </div>
 
-                  {isSelected && <CheckCircle2 className="w-4 h-4 text-amber-400 flex-shrink-0" />}
+              {/* Các ưu điểm của chế độ All */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 text-[11px]">
+                <div className="flex items-start gap-2 bg-slate-950/40 p-2.5 rounded-xl border border-slate-800/80 text-slate-300">
+                  <CheckCircle2 className="w-4 h-4 text-amber-400 flex-shrink-0 mt-0.5" />
+                  <div>
+                    <strong className="text-amber-200 block font-semibold">Ưu tiên Video trước:</strong>
+                    Tự động chọn video sắc nét 9:16, chỉ bù ảnh tĩnh Ken Burns khi thiếu video.
+                  </div>
                 </div>
-              );
-            })}
-          </div>
+                <div className="flex items-start gap-2 bg-slate-950/40 p-2.5 rounded-xl border border-slate-800/80 text-slate-300">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-400 flex-shrink-0 mt-0.5" />
+                  <div>
+                    <strong className="text-emerald-200 block font-semibold">Chống trùng lặp vừa phải:</strong>
+                    Luân phiên các công trình, cấm 2 clip liên tiếp cùng 1 file, tịnh tiến góc quay video dài.
+                  </div>
+                </div>
+                <div className="flex items-start gap-2 bg-slate-950/40 p-2.5 rounded-xl border border-slate-800/80 text-slate-300">
+                  <CheckCircle2 className="w-4 h-4 text-cyan-400 flex-shrink-0 mt-0.5" />
+                  <div>
+                    <strong className="text-cyan-200 block font-semibold">Ghi nhớ lịch sử sử dụng:</strong>
+                    Ưu tiên các góc quay mới lạ chưa từng xuất hiện trong các video đã tạo trước đó.
+                  </div>
+                </div>
+                <div className="flex items-start gap-2 bg-slate-950/40 p-2.5 rounded-xl border border-slate-800/80 text-slate-300">
+                  <CheckCircle2 className="w-4 h-4 text-yellow-400 flex-shrink-0 mt-0.5" />
+                  <div>
+                    <strong className="text-yellow-200 block font-semibold">Chuẩn 4 Giai Đoạn:</strong>
+                    Thô (0-20%) ➔ Lắp ráp (20-50%) ➔ Trang trí (50-75%) ➔ Đèn hào quang & Lễ Phật (75-100%).
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* CHẾ ĐỘ 2: CHỌN 1 CÔNG TRÌNH CỤ THỂ */}
+          {sourceMode === 'single' && (
+            <div>
+              {projects.length === 0 ? (
+                <div className="p-6 text-center text-slate-500 text-xs bg-slate-900/50 rounded-xl border border-slate-800">
+                  Chưa có công trình nào trong thư viện. Vui lòng thêm công trình tại tab "Thư Viện Source".
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 max-h-72 overflow-y-auto pr-1">
+                  {projects.map((proj) => {
+                    const isSelected = selectedProjectId === proj.id;
+                    return (
+                      <div
+                        key={proj.id}
+                        onClick={() => setSelectedProjectId(proj.id)}
+                        className={`p-3.5 rounded-xl border cursor-pointer transition flex items-center justify-between ${
+                          isSelected
+                            ? 'bg-amber-500/15 border-amber-500/60 shadow-md shadow-amber-500/10'
+                            : 'bg-slate-900/60 border-slate-800 hover:border-slate-700'
+                        }`}
+                      >
+                        <div className="flex items-center gap-3">
+                          <Folder className={`w-5 h-5 ${isSelected ? 'text-amber-400' : 'text-slate-500'}`} />
+                          <div>
+                            <p className={`text-xs font-bold line-clamp-1 ${isSelected ? 'text-amber-300' : 'text-slate-200'}`}>
+                              {proj.folder_name}
+                            </p>
+                            <p className="text-[11px] text-slate-400">
+                              {proj.total_videos} videos {proj.is_embedded ? '• Đã Nhúng AI' : ''}
+                            </p>
+                          </div>
+                        </div>
+
+                        {isSelected && <CheckCircle2 className="w-4 h-4 text-amber-400 flex-shrink-0" />}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
         {/* BƯỚC 3: NÚT LẮP RÁP TIMELINE */}
         <div className="pt-2">
           <button
             onClick={handleAssembleStoryline}
-            disabled={assembling || subtitles.length === 0 || !selectedProjectId}
+            disabled={assembling || subtitles.length === 0 || (sourceMode === 'single' && !selectedProjectId)}
             className="w-full py-4 bg-gradient-to-r from-amber-500 via-yellow-500 to-amber-500 hover:from-amber-600 hover:to-yellow-600 text-slate-950 font-extrabold text-sm rounded-2xl shadow-xl shadow-amber-500/20 transition-all flex items-center justify-center gap-3 disabled:opacity-40"
           >
             {assembling ? (

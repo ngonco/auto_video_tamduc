@@ -9,6 +9,7 @@ function isImageFile(filePath: string): boolean {
 export interface SourceClipRecord {
   id: string;
   projectId: string;
+  projectName?: string;
   fileName: string;
   filePath: string;
   duration: number;
@@ -20,11 +21,15 @@ export interface SourceClipRecord {
   sceneDescription: string;
   thumbnailPath: string;
   mediaType?: 'video' | 'image';
+  usageCount?: number;
+  lastUsedAt?: string;
 }
 
 export interface TimelineClipItem {
   id: string;
   sourceId: string;
+  projectId?: string;
+  projectName?: string;
   fileName: string;
   filePath: string;
   thumbnailPath: string;
@@ -40,10 +45,51 @@ export interface TimelineClipItem {
 export interface StorylineGenerationResult {
   totalDuration: number;
   clips: TimelineClipItem[];
+  mode?: 'single' | 'all';
+}
+
+export interface StorylineOptions {
+  mode?: 'single' | 'all';
+  minClipSec?: number;
+  maxClipSec?: number;
 }
 
 /**
- * Thuật toán phân bổ clip 4 giai đoạn tự động, chuẩn tiến trình không gian thờ Phật:
+ * Sắp xếp pool candidates theo các tiêu chí ưu tiên:
+ * 1. Video trước, Ảnh tĩnh sau
+ * 2. usageCount ASC (ít dùng nhất lên đầu để video luôn tươi mới)
+ * 3. aestheticScore DESC (điểm thẩm mỹ cao nhất)
+ * 4. 9:16 trước 16:9
+ */
+function sortStageCandidates(candidates: SourceClipRecord[]): SourceClipRecord[] {
+  const videos = candidates.filter((c) => c.mediaType === 'video' && !isImageFile(c.filePath));
+  const images = candidates.filter((c) => c.mediaType === 'image' || isImageFile(c.filePath));
+
+  const sorter = (a: SourceClipRecord, b: SourceClipRecord) => {
+    // 1. usageCount thấp hơn lên trước
+    const usageA = a.usageCount || 0;
+    const usageB = b.usageCount || 0;
+    if (usageA !== usageB) return usageA - usageB;
+
+    // 2. Điểm thẩm mỹ cao hơn lên trước
+    const scoreA = a.aestheticScore || 7.5;
+    const scoreB = b.aestheticScore || 7.5;
+    if (scoreA !== scoreB) return scoreB - scoreA;
+
+    // 3. Tỷ lệ 9:16 ưu tiên trước
+    const is916A = a.aspectRatioType === '9:16' ? 1 : 0;
+    const is916B = b.aspectRatioType === '9:16' ? 1 : 0;
+    return is916B - is916A;
+  };
+
+  videos.sort(sorter);
+  images.sort(sorter);
+
+  return [...videos, ...images];
+}
+
+/**
+ * Thuật toán phân bổ clip 4 giai đoạn tự động kèm cơ chế chống trùng lặp vừa phải:
  * - 0% - 20%: Stage 1 (Thi công thô / Khung tủ)
  * - 20% - 50%: Stage 2 (Lắp ráp hoàn thiện / Vách ngăn CNC)
  * - 50% - 75%: Stage 3 (Cắm hoa sen, hoa huệ, bày mâm bồng, tượng Phật)
@@ -52,17 +98,31 @@ export interface StorylineGenerationResult {
 export function generateStoryline(
   sourceClips: SourceClipRecord[],
   targetDuration: number,
-  minClipSec: number = 4.0,
-  maxClipSec: number = 5.5
+  optionsOrMinSec: StorylineOptions | number = 4.0,
+  maxClipSecArg: number = 5.5
 ): StorylineGenerationResult {
+  let mode: 'single' | 'all' = 'single';
+  let minClipSec = 4.0;
+  let maxClipSec = 5.5;
+
+  if (typeof optionsOrMinSec === 'object' && optionsOrMinSec !== null) {
+    mode = optionsOrMinSec.mode || 'single';
+    minClipSec = optionsOrMinSec.minClipSec || 4.0;
+    maxClipSec = optionsOrMinSec.maxClipSec || 5.5;
+  } else {
+    minClipSec = typeof optionsOrMinSec === 'number' ? optionsOrMinSec : 4.0;
+    maxClipSec = maxClipSecArg || 5.5;
+  }
+
   if (!sourceClips || sourceClips.length === 0 || targetDuration <= 0) {
-    return { totalDuration: targetDuration, clips: [] };
+    return { totalDuration: targetDuration, clips: [], mode };
   }
 
   // 1. Chuẩn hóa danh sách source clips
   const normalizedSources: SourceClipRecord[] = sourceClips.map((s: any) => ({
     id: s.id,
-    projectId: s.projectId || s.project_id,
+    projectId: s.projectId || s.project_id || '',
+    projectName: s.projectName || s.project_name || s.folder_name || '',
     fileName: s.fileName || s.file_name,
     filePath: s.filePath || s.file_path,
     duration: Number(s.duration) || 5.0,
@@ -74,6 +134,8 @@ export function generateStoryline(
     sceneDescription: s.sceneDescription || s.scene_description || '',
     thumbnailPath: s.thumbnailPath || s.thumbnail_path || '',
     mediaType: s.mediaType || (isImageFile(s.filePath || s.file_path) ? 'image' : 'video'),
+    usageCount: Number(s.usageCount ?? s.usage_count ?? 0),
+    lastUsedAt: s.lastUsedAt || s.last_used_at || '',
   }));
 
   // 2. Nhóm source theo 4 giai đoạn
@@ -92,13 +154,13 @@ export function generateStoryline(
     clipsByStage[stage].push(clip);
   });
 
-  // Sắp xếp trong từng stage theo điểm thẩm mỹ (aestheticScore) giảm dần
+  // Sắp xếp trong từng stage theo thứ tự ưu tiên: Video trước -> Usage ít trước -> Thẩm mỹ cao -> 9:16
   Object.keys(clipsByStage).forEach((stageKey) => {
-    clipsByStage[stageKey].sort((a, b) => (b.aestheticScore || 0) - (a.aestheticScore || 0));
+    clipsByStage[stageKey] = sortStageCandidates(clipsByStage[stageKey]);
   });
 
   // 3. Tính số lượng clip cần thiết để lấp đầy targetDuration sao cho mỗi clip chuẩn 4.0s - 5.5s
-  const idealClipDur = Math.max(minClipSec, Math.min(maxClipSec, 5.0)); // 5.0s
+  const idealClipDur = Math.max(minClipSec, Math.min(maxClipSec, 5.0));
   let estimatedClipsCount = Math.max(1, Math.ceil(targetDuration / maxClipSec));
   if (targetDuration / estimatedClipsCount < minClipSec && estimatedClipsCount > 1) {
     estimatedClipsCount = Math.max(1, Math.round(targetDuration / idealClipDur));
@@ -109,6 +171,7 @@ export function generateStoryline(
   let currentTimelineTime = 0;
   let clipIndexCounter = 1;
   let lastUsedSourceId = '';
+  let lastUsedProjectId = '';
   const videoUsageCount: Record<string, number> = {};
   const stageCursors: Record<string, number> = {
     STAGE_1_RAW_CARPENTRY: 0,
@@ -155,21 +218,34 @@ export function generateStoryline(
       }
     }
 
-    // Chọn candidate tốt nhất, tránh lặp liền kề với clip trước nếu có >= 2 clip trong pool
-    let candidate = candidates[0];
-    const cursor = stageCursors[preferredStage] || 0;
-    if (candidates.length > 1) {
-      let chosenIdx = cursor % candidates.length;
-      if (candidates[chosenIdx].id === lastUsedSourceId) {
-        chosenIdx = (chosenIdx + 1) % candidates.length;
-      }
-      candidate = candidates[chosenIdx];
-      stageCursors[preferredStage] = chosenIdx + 1;
-    } else {
-      candidate = candidates[0];
+    // Lọc và chọn candidate tối ưu chống trùng lặp vừa phải:
+    // Tiêu chí 1: Không trùng lặp liền kề cùng 1 file (c.id !== lastUsedSourceId)
+    // Tiêu chí 2: Ở chế độ all (hoặc có nhiều project), ưu tiên chọn project khác với clip vừa chọn (c.projectId !== lastUsedProjectId)
+    let availableCandidates = candidates.filter((c) => c.id !== lastUsedSourceId);
+    if (availableCandidates.length === 0) {
+      availableCandidates = candidates; // Fallback nếu pool chỉ có duy nhất 1 clip
     }
 
+    let candidate: SourceClipRecord = availableCandidates[0];
+
+    // Nếu có nhiều project, tìm candidate khác project trước đó
+    if (availableCandidates.length > 1 && lastUsedProjectId) {
+      const differentProjectCandidates = availableCandidates.filter((c) => c.projectId && c.projectId !== lastUsedProjectId);
+      if (differentProjectCandidates.length > 0) {
+        availableCandidates = differentProjectCandidates;
+      }
+    }
+
+    // Chọn candidate theo cursor xoay vòng trong pool
+    const cursor = stageCursors[preferredStage] || 0;
+    const chosenIdx = cursor % availableCandidates.length;
+    candidate = availableCandidates[chosenIdx];
+    stageCursors[preferredStage] = chosenIdx + 1;
+
     lastUsedSourceId = candidate.id;
+    if (candidate.projectId) {
+      lastUsedProjectId = candidate.projectId;
+    }
 
     const isImg = candidate.mediaType === 'image' || isImageFile(candidate.filePath);
     let sourceStart = 0;
@@ -191,6 +267,8 @@ export function generateStoryline(
     timelineClips.push({
       id: `clip_${clipIndexCounter++}`,
       sourceId: candidate.id,
+      projectId: candidate.projectId,
+      projectName: candidate.projectName,
       fileName: candidate.fileName,
       filePath: candidate.filePath,
       thumbnailPath: candidate.thumbnailPath,
@@ -216,6 +294,7 @@ export function generateStoryline(
   return {
     totalDuration: Number(targetDuration.toFixed(2)),
     clips: timelineClips,
+    mode,
   };
 }
 
@@ -235,7 +314,7 @@ export function rebalanceTimelineClips(
   // Nếu không còn clip nào, tự sinh lại toàn bộ từ availableSources
   if (!currentClips || currentClips.length === 0) {
     if (availableSources && availableSources.length > 0) {
-      return generateStoryline(availableSources, totalDuration, minClipSec, maxClipSec).clips;
+      return generateStoryline(availableSources, totalDuration, { minClipSec, maxClipSec }).clips;
     }
     return [];
   }
@@ -248,9 +327,10 @@ export function rebalanceTimelineClips(
 
   // Nếu số clip hiện tại ít hơn neededCount (do người dùng xóa bớt), ta bù thêm clip từ availableSources
   let workingClips = [...currentClips];
-  const pool = availableSources && availableSources.length > 0 ? availableSources : currentClips.map(c => ({
+  const pool = availableSources && availableSources.length > 0 ? availableSources : currentClips.map((c) => ({
     id: c.sourceId || c.id,
-    projectId: '',
+    projectId: c.projectId || '',
+    projectName: c.projectName || '',
     fileName: c.fileName,
     filePath: c.filePath,
     duration: c.sourceDuration || 5.0,
@@ -262,6 +342,7 @@ export function rebalanceTimelineClips(
     sceneDescription: '',
     thumbnailPath: c.thumbnailPath,
     mediaType: c.mediaType,
+    usageCount: 0,
   }));
 
   let fillIdx = 0;
@@ -271,6 +352,8 @@ export function rebalanceTimelineClips(
     workingClips.push({
       id: `clip_fill_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
       sourceId: src.id,
+      projectId: src.projectId,
+      projectName: src.projectName,
       fileName: src.fileName,
       filePath: src.filePath,
       thumbnailPath: src.thumbnailPath,
@@ -317,3 +400,4 @@ export function rebalanceTimelineClips(
     return newClip;
   });
 }
+

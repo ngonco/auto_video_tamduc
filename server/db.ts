@@ -79,4 +79,20 @@ db.exec(`
   );
 `);
 
+// Migration an toàn: Bổ sung các cột mới nếu bảng video_sources đã tồn tại từ trước
+try {
+  const columns = db.prepare(`PRAGMA table_info(video_sources)`).all() as any[];
+  const colNames = columns.map((c) => c.name);
+  if (!colNames.includes('usage_count')) {
+    db.exec(`ALTER TABLE video_sources ADD COLUMN usage_count INTEGER DEFAULT 0;`);
+    console.log('[Database] Migrated: added column `usage_count` to video_sources');
+  }
+  if (!colNames.includes('last_used_at')) {
+    db.exec(`ALTER TABLE video_sources ADD COLUMN last_used_at DATETIME;`);
+    console.log('[Database] Migrated: added column `last_used_at` to video_sources');
+  }
+} catch (migErr: any) {
+  console.warn('[Database] Migration warning:', migErr.message);
+}
+
 console.log(`[Database] SQLite connected successfully at: ${DB_PATH}`);

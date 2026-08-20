@@ -279,29 +279,99 @@ generatorRouter.post('/process-voice', async (req, res) => {
   }
 });
 
-// 6. Tự động sinh Storyline Clips theo 4 giai đoạn
+// 6. Lấy thống kê tổng quan toàn bộ thư viện (cho chế độ All Projects)
+generatorRouter.get('/library-summary', (req, res) => {
+  try {
+    const totalProjects = (db.prepare(`SELECT COUNT(*) as count FROM projects`).get() as any)?.count || 0;
+    const totalSources = (db.prepare(`SELECT COUNT(*) as count FROM video_sources`).get() as any)?.count || 0;
+    const totalDuration = (db.prepare(`SELECT SUM(duration) as total FROM video_sources`).get() as any)?.total || 0;
+    const stageStats = db.prepare(`SELECT stage, COUNT(*) as count FROM video_sources GROUP BY stage`).all();
+
+    res.json({
+      success: true,
+      data: {
+        totalProjects,
+        totalSources,
+        totalDuration: Number(totalDuration.toFixed(1)),
+        stageStats,
+      },
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// 7. Tự động sinh Storyline Clips theo 4 giai đoạn (hỗ trợ cả 2 chế độ: 1 công trình hoặc Toàn bộ thư viện)
 generatorRouter.post('/assemble-storyline', async (req, res) => {
   try {
-    const { projectId, targetDuration } = req.body;
-    if (!projectId || !targetDuration) {
-      return res.status(400).json({ success: false, error: 'Thiếu projectId hoặc targetDuration' });
+    const { projectId, targetDuration, mode } = req.body;
+    const isAllMode = mode === 'all' || projectId === 'ALL' || !projectId;
+
+    if (!isAllMode && !projectId) {
+      return res.status(400).json({ success: false, error: 'Thiếu projectId' });
+    }
+    if (!targetDuration || Number(targetDuration) <= 0) {
+      return res.status(400).json({ success: false, error: 'Thời lượng targetDuration không hợp lệ' });
     }
 
-    const clips: SourceClipRecord[] = db.prepare(`
-      SELECT 
-        id, project_id as projectId, file_name as fileName, file_path as filePath,
-        duration, width, height, aspect_ratio_type as aspectRatioType,
-        stage, aesthetic_score as aestheticScore, scene_description as sceneDescription,
-        thumbnail_path as thumbnailPath
-      FROM video_sources 
-      WHERE project_id = ?
-    `).all(projectId) as any[];
+    let clips: SourceClipRecord[] = [];
+    if (isAllMode) {
+      // Truy vấn toàn bộ source từ tất cả công trình kèm tên công trình
+      clips = db.prepare(`
+        SELECT 
+          v.id, v.project_id as projectId, p.folder_name as projectName,
+          v.file_name as fileName, v.file_path as filePath,
+          v.duration, v.width, v.height, v.aspect_ratio_type as aspectRatioType,
+          v.stage, v.aesthetic_score as aestheticScore, v.scene_description as sceneDescription,
+          v.thumbnail_path as thumbnailPath, v.usage_count as usageCount, v.last_used_at as lastUsedAt
+        FROM video_sources v
+        LEFT JOIN projects p ON v.project_id = p.id
+        ORDER BY v.usage_count ASC, v.aesthetic_score DESC
+      `).all() as any[];
+    } else {
+      // Truy vấn source của 1 công trình cụ thể
+      clips = db.prepare(`
+        SELECT 
+          v.id, v.project_id as projectId, p.folder_name as projectName,
+          v.file_name as fileName, v.file_path as filePath,
+          v.duration, v.width, v.height, v.aspect_ratio_type as aspectRatioType,
+          v.stage, v.aesthetic_score as aestheticScore, v.scene_description as sceneDescription,
+          v.thumbnail_path as thumbnailPath, v.usage_count as usageCount, v.last_used_at as lastUsedAt
+        FROM video_sources v
+        LEFT JOIN projects p ON v.project_id = p.id
+        WHERE v.project_id = ?
+        ORDER BY v.usage_count ASC, v.aesthetic_score DESC
+      `).all(projectId) as any[];
+    }
 
     if (clips.length === 0) {
-      return res.status(400).json({ success: false, error: 'Công trình này chưa có video nào' });
+      return res.status(400).json({
+        success: false,
+        error: isAllMode
+          ? 'Thư viện hiện chưa có video/ảnh nào. Vui lòng thêm công trình vào thư viện trước.'
+          : 'Công trình này chưa có video/ảnh nào.',
+      });
     }
 
-    const storyline = generateStoryline(clips, Number(targetDuration));
+    // Sinh storyline theo thuật toán 4 giai đoạn kèm chống trùng lặp vừa phải
+    const storyline = generateStoryline(clips, Number(targetDuration), {
+      mode: isAllMode ? 'all' : 'single',
+    });
+
+    // Cập nhật tăng usage_count và ghi nhận last_used_at cho các clip được chọn
+    try {
+      const chosenSourceIds = [...new Set(storyline.clips.map((c) => c.sourceId).filter(Boolean))];
+      if (chosenSourceIds.length > 0) {
+        const placeholders = chosenSourceIds.map(() => '?').join(',');
+        db.prepare(`
+          UPDATE video_sources 
+          SET usage_count = COALESCE(usage_count, 0) + 1, last_used_at = CURRENT_TIMESTAMP
+          WHERE id IN (${placeholders})
+        `).run(...chosenSourceIds);
+      }
+    } catch (uErr: any) {
+      console.warn('[Generator] Error updating clip usage count:', uErr.message);
+    }
 
     // Đọc Outro mặc định từ config.json
     const configPath = path.resolve(process.cwd(), 'config.json');
@@ -334,6 +404,7 @@ generatorRouter.post('/assemble-storyline', async (req, res) => {
         ...storyline,
         availableSources: clips,
         outro: outroInfo,
+        mode: isAllMode ? 'all' : 'single',
       },
     });
   } catch (err: any) {
