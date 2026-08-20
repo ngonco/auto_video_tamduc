@@ -16,14 +16,21 @@ $dlg.CheckPathExists = $true
 $dlg.Filter = "Audio Files (*.mp3;*.wav;*.m4a;*.aac;*.ogg;*.flac)|*.mp3;*.wav;*.m4a;*.aac;*.ogg;*.flac|All Files (*.*)|*.*"
 
 if ($InitialDir -and (Test-Path $InitialDir)) {
-    $dlg.InitialDirectory = $InitialDir
+    if (Test-Path $InitialDir -PathType Container) {
+        $dlg.InitialDirectory = $InitialDir
+    } else {
+        $dlg.InitialDirectory = [System.IO.Path]::GetDirectoryName($InitialDir)
+    }
 }
 
 $form = New-Object System.Windows.Forms.Form
 $form.TopMost = $true
+$form.ShowInTaskbar = $true
 $form.StartPosition = [System.Windows.Forms.FormStartPosition]::CenterScreen
+$form.WindowState = [System.Windows.Forms.FormWindowState]::Normal
 
-if ($dlg.ShowDialog($form) -eq [System.Windows.Forms.DialogResult]::OK) {
+$result = $dlg.ShowDialog($form)
+if ($result -eq [System.Windows.Forms.DialogResult]::OK) {
     [Console]::Out.WriteLine($dlg.FileName)
 }
 

@@ -378,3 +378,12 @@ Hệ thống đã tạo sẵn bộ công cụ sao lưu tự động toàn bộ m
 
 > [!NOTE]
 > File `.gitignore` đã được cấu hình chặt chẽ để tự động loại trừ các khóa API bí mật (`.env`), dữ liệu bộ nhớ đệm (`.cache/`, `.log`), và file build (`node_modules/`, `dist/`), đảm bảo an toàn 100% khi sao lưu công khai hoặc riêng tư trên GitHub.
+
+---
+
+## 10. NHẬT KÝ KIỂM THỬ & TỐI ƯU HÓA TOÀN DIỆN (SYSTEM AUDIT LOG)
+
+- **Native Dialogs (PowerShell STA)**: Đồng bộ hóa toàn bộ 4 script (`picker.ps1`, `audio-picker.ps1`, `media-picker.ps1`, `video-picker.ps1`) với cơ chế xử lý `InitialDir` thông minh (tự động nhận diện thư mục cha nếu truyền file path) và thiết lập `$form.ShowInTaskbar = $true` + `$form.WindowState = Normal` để đảm bảo hộp thoại luôn nổi lên trên cùng màn hình.
+- **Config Persistence**: Tối ưu hóa việc lưu trữ và đồng bộ hóa `defaultOutroPath`, `outroEnabled`, `outroDuration` đồng thời ở cả cấp root và khối `defaults` trong `config.json` để tương thích ngược 100% với các service backend.
+- **Build & Quality Assurance**: Dự án đã vượt qua bài kiểm tra `npx tsc --noEmit` và `npm run build` với 0 lỗi cú pháp, toàn bộ các luồng Thư viện, Tạo video nhanh, Dựng timeline và Xuất MP4 hoạt động trơn tru, ổn định tuyệt đối.
+

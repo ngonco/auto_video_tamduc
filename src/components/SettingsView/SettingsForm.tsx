@@ -112,6 +112,13 @@ export const SettingsForm: React.FC = () => {
         ...rawConfig,
         defaultOutroPath,
         outroEnabled,
+        outroDuration,
+        defaults: {
+          ...(rawConfig.defaults || {}),
+          defaultOutroPath,
+          outroEnabled,
+          outroDuration,
+        },
       };
 
       const res = await fetch('/api/settings', {

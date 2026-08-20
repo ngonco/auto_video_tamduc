@@ -17,14 +17,21 @@ $dlg.FileName = "SelectFolder"
 $dlg.Filter = "Folders|*."
 
 if ($InitialDir -and (Test-Path $InitialDir)) {
-    $dlg.InitialDirectory = $InitialDir
+    if (Test-Path $InitialDir -PathType Container) {
+        $dlg.InitialDirectory = $InitialDir
+    } else {
+        $dlg.InitialDirectory = [System.IO.Path]::GetDirectoryName($InitialDir)
+    }
 }
 
 $form = New-Object System.Windows.Forms.Form
 $form.TopMost = $true
+$form.ShowInTaskbar = $true
 $form.StartPosition = [System.Windows.Forms.FormStartPosition]::CenterScreen
+$form.WindowState = [System.Windows.Forms.FormWindowState]::Normal
 
-if ($dlg.ShowDialog($form) -eq [System.Windows.Forms.DialogResult]::OK) {
+$result = $dlg.ShowDialog($form)
+if ($result -eq [System.Windows.Forms.DialogResult]::OK) {
     $selected = $dlg.FileName
     if (Test-Path $selected -PathType Container) {
         [Console]::Out.WriteLine($selected)

@@ -309,14 +309,19 @@ generatorRouter.post('/assemble-storyline', async (req, res) => {
     }
 
     let outroInfo = null;
-    if (configData.defaultOutroPath && fs.existsSync(configData.defaultOutroPath)) {
+    const outroPath = configData.defaultOutroPath || configData.defaults?.defaultOutroPath || '';
+    const outroEnabled = configData.outroEnabled !== undefined 
+      ? configData.outroEnabled 
+      : (configData.defaults?.outroEnabled ?? true);
+
+    if (outroPath && fs.existsSync(outroPath)) {
       try {
-        const meta = await getVideoMetadata(configData.defaultOutroPath);
+        const meta = await getVideoMetadata(outroPath);
         outroInfo = {
-          filePath: configData.defaultOutroPath,
-          fileName: path.basename(configData.defaultOutroPath),
-          duration: meta.duration || 5.0,
-          enabled: configData.outroEnabled ?? true,
+          filePath: outroPath,
+          fileName: path.basename(outroPath),
+          duration: meta.duration || configData.outroDuration || configData.defaults?.outroDuration || 5.0,
+          enabled: outroEnabled,
         };
       } catch (_) {}
     }
