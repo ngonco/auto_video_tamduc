@@ -209,10 +209,9 @@ export async function renderFinalVideo(
           .on('error', (err) => reject(err))
           .run();
       } else {
-        // Xử lý Video clip: Sử dụng -stream_loop -1 để đảm bảo clip ngắn không bị thiếu frame
+        // Xử lý Video clip: Cắt trực tiếp từ mốc sourceStart với thời lượng thực tế
         command
           .input(clip.filePath)
-          .inputOptions(['-stream_loop -1'])
           .setStartTime(clip.sourceStart || 0)
           .setDuration(duration);
 

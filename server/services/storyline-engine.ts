@@ -159,13 +159,8 @@ export function generateStoryline(
     clipsByStage[stageKey] = sortStageCandidates(clipsByStage[stageKey]);
   });
 
-  // 3. Tính số lượng clip cần thiết để lấp đầy targetDuration sao cho mỗi clip chuẩn 4.0s - 5.5s
+  // 3. Phân bổ clip động (Dynamic Duration Accumulator) - Tuyệt đối không đứng hình (No-Freeze Frame)
   const idealClipDur = Math.max(minClipSec, Math.min(maxClipSec, 5.0));
-  let estimatedClipsCount = Math.max(1, Math.ceil(targetDuration / maxClipSec));
-  if (targetDuration / estimatedClipsCount < minClipSec && estimatedClipsCount > 1) {
-    estimatedClipsCount = Math.max(1, Math.round(targetDuration / idealClipDur));
-  }
-  const exactClipDur = targetDuration / estimatedClipsCount;
 
   const timelineClips: TimelineClipItem[] = [];
   let currentTimelineTime = 0;
@@ -180,15 +175,13 @@ export function generateStoryline(
     STAGE_4_WORSHIP_ALTAR: 0,
   };
 
-  for (let clipIdx = 0; clipIdx < estimatedClipsCount; clipIdx++) {
-    // Xác định thời lượng cho clip này
-    let cutDuration = exactClipDur;
-    if (clipIdx === estimatedClipsCount - 1) {
-      // Clip cuối cùng gánh toàn bộ phần dư còn lại để khớp 100% targetDuration
-      cutDuration = Math.max(0.1, targetDuration - currentTimelineTime);
-    }
+  let maxIterations = 200; // Bảo vệ chống vòng lặp vô tận
 
-    const progressRatio = (currentTimelineTime + cutDuration / 2) / targetDuration;
+  while (currentTimelineTime < targetDuration - 0.05 && maxIterations-- > 0) {
+    const remainingTime = Number((targetDuration - currentTimelineTime).toFixed(2));
+    if (remainingTime <= 0.05) break;
+
+    const progressRatio = (currentTimelineTime + Math.min(remainingTime, idealClipDur) / 2) / targetDuration;
 
     // Xác định stage ưu tiên theo tiến trình thời gian
     let preferredStage: 'STAGE_1_RAW_CARPENTRY' | 'STAGE_2_ASSEMBLY_FINISHING' | 'STAGE_3_DECOR_FLOWERS' | 'STAGE_4_WORSHIP_ALTAR';
@@ -219,27 +212,22 @@ export function generateStoryline(
     }
 
     // Lọc và chọn candidate tối ưu chống trùng lặp vừa phải:
-    // Tiêu chí 1: Không trùng lặp liền kề cùng 1 file (c.id !== lastUsedSourceId)
-    // Tiêu chí 2: Ở chế độ all (hoặc có nhiều project), ưu tiên chọn project khác với clip vừa chọn (c.projectId !== lastUsedProjectId)
     let availableCandidates = candidates.filter((c) => c.id !== lastUsedSourceId);
     if (availableCandidates.length === 0) {
       availableCandidates = candidates; // Fallback nếu pool chỉ có duy nhất 1 clip
     }
 
-    let candidate: SourceClipRecord = availableCandidates[0];
-
-    // Nếu có nhiều project, tìm candidate khác project trước đó
     if (availableCandidates.length > 1 && lastUsedProjectId) {
-      const differentProjectCandidates = availableCandidates.filter((c) => c.projectId && c.projectId !== lastUsedProjectId);
-      if (differentProjectCandidates.length > 0) {
-        availableCandidates = differentProjectCandidates;
+      const diffProj = availableCandidates.filter((c) => c.projectId && c.projectId !== lastUsedProjectId);
+      if (diffProj.length > 0) {
+        availableCandidates = diffProj;
       }
     }
 
     // Chọn candidate theo cursor xoay vòng trong pool
     const cursor = stageCursors[preferredStage] || 0;
     const chosenIdx = cursor % availableCandidates.length;
-    candidate = availableCandidates[chosenIdx];
+    const candidate = availableCandidates[chosenIdx];
     stageCursors[preferredStage] = chosenIdx + 1;
 
     lastUsedSourceId = candidate.id;
@@ -249,20 +237,52 @@ export function generateStoryline(
 
     const isImg = candidate.mediaType === 'image' || isImageFile(candidate.filePath);
     let sourceStart = 0;
+    let clipDuration = idealClipDur;
 
-    if (!isImg && candidate.duration > cutDuration) {
-      // Đối với video dài: mỗi lần sử dụng sẽ cắt ở các phân đoạn tịnh tiến khác nhau trong video gốc
-      const usageIndex = videoUsageCount[candidate.id] || 0;
-      videoUsageCount[candidate.id] = usageIndex + 1;
+    if (isImg) {
+      // Đối với ảnh tĩnh: gán thời lượng chuẩn (4.0 - 5.5s) hoặc phần thời lượng còn lại nếu sắp hết
+      clipDuration = Math.min(remainingTime, idealClipDur);
+      if (remainingTime > idealClipDur && remainingTime < idealClipDur + minClipSec) {
+        clipDuration = remainingTime / 2;
+      }
+      sourceStart = 0;
+    } else {
+      // Đối với Video:
+      const videoDuration = Math.max(0.5, candidate.duration);
 
-      const maxStart = Math.max(0, candidate.duration - cutDuration);
-      // Bước nhảy bằng độ dài cutDuration để các đoạn không bị trùng nội dung
-      sourceStart = (usageIndex * cutDuration) % (maxStart + 0.1);
-      if (sourceStart > maxStart) sourceStart = maxStart;
+      if (videoDuration <= minClipSec) {
+        // [QUY TẮC NO-FREEZE 1]: Video ngắn (ví dụ 1.5s - 3.8s) -> Dùng đúng thời lượng thật của video, không kéo dài gây đứng hình
+        clipDuration = Math.min(remainingTime, videoDuration);
+        sourceStart = 0;
+      } else {
+        // [QUY TẮC NO-FREEZE 2]: Video dài -> Cắt đoạn chuẩn 4.0s - 5.5s và tịnh tiến điểm bắt đầu
+        let targetSlice = idealClipDur;
+        if (remainingTime <= maxClipSec) {
+          targetSlice = remainingTime;
+        } else if (remainingTime < idealClipDur + minClipSec) {
+          targetSlice = remainingTime / 2;
+        }
+
+        const maxStart = Math.max(0, videoDuration - targetSlice);
+        if (maxStart > 0) {
+          const usageIndex = videoUsageCount[candidate.id] || 0;
+          videoUsageCount[candidate.id] = usageIndex + 1;
+          sourceStart = (usageIndex * targetSlice) % (maxStart + 0.1);
+          if (sourceStart > maxStart) sourceStart = maxStart;
+        } else {
+          sourceStart = 0;
+        }
+
+        const maxAvailable = videoDuration - sourceStart;
+        clipDuration = Math.min(remainingTime, targetSlice, maxAvailable);
+      }
     }
 
+    // Làm tròn thời lượng
+    clipDuration = Math.max(0.5, Number(clipDuration.toFixed(2)));
+
     const tStart = Number(currentTimelineTime.toFixed(2));
-    const tEnd = Number((currentTimelineTime + cutDuration).toFixed(2));
+    const tEnd = Number((currentTimelineTime + clipDuration).toFixed(2));
 
     timelineClips.push({
       id: `clip_${clipIndexCounter++}`,
@@ -276,19 +296,49 @@ export function generateStoryline(
       timelineStart: tStart,
       timelineEnd: tEnd,
       sourceStart: Number(sourceStart.toFixed(2)),
-      sourceDuration: Number(cutDuration.toFixed(2)),
+      sourceDuration: Number(clipDuration.toFixed(2)),
       aspectRatioType: candidate.aspectRatioType,
       mediaType: isImg ? 'image' : 'video',
     });
 
-    currentTimelineTime += cutDuration;
+    currentTimelineTime += clipDuration;
   }
 
-  // Đảm bảo clip cuối cùng chạm chính xác 100% targetDuration
+  // Đảm bảo clip cuối cùng khớp chính xác 100% targetDuration
   if (timelineClips.length > 0) {
     const last = timelineClips[timelineClips.length - 1];
-    last.timelineEnd = Number(targetDuration.toFixed(2));
-    last.sourceDuration = Number((last.timelineEnd - last.timelineStart).toFixed(2));
+    const diff = Number((targetDuration - last.timelineEnd).toFixed(2));
+    if (Math.abs(diff) > 0.05) {
+      const sourceMatch = normalizedSources.find((s) => s.id === last.sourceId);
+      const isImg = last.mediaType === 'image';
+      const maxSrcDur = sourceMatch?.duration || 10;
+      const canExtend = isImg || (last.sourceStart + (last.sourceDuration + diff) <= maxSrcDur);
+
+      if (canExtend) {
+        last.timelineEnd = Number(targetDuration.toFixed(2));
+        last.sourceDuration = Number((last.timelineEnd - last.timelineStart).toFixed(2));
+      } else {
+        const nextCandidate = normalizedSources.find((s) => s.id !== last.sourceId) || normalizedSources[0];
+        const extraStart = 0;
+        const extraDur = Math.max(0.5, targetDuration - last.timelineEnd);
+        timelineClips.push({
+          id: `clip_${clipIndexCounter++}`,
+          sourceId: nextCandidate.id,
+          projectId: nextCandidate.projectId,
+          projectName: nextCandidate.projectName,
+          fileName: nextCandidate.fileName,
+          filePath: nextCandidate.filePath,
+          thumbnailPath: nextCandidate.thumbnailPath,
+          stage: nextCandidate.stage,
+          timelineStart: last.timelineEnd,
+          timelineEnd: Number(targetDuration.toFixed(2)),
+          sourceStart: extraStart,
+          sourceDuration: Number(extraDur.toFixed(2)),
+          aspectRatioType: nextCandidate.aspectRatioType,
+          mediaType: nextCandidate.mediaType,
+        });
+      }
+    }
   }
 
   return {

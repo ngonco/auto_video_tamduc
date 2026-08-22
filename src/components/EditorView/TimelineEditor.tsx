@@ -716,18 +716,13 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
     return () => el.removeEventListener('wheel', handler);
   }, []);
 
-  // ── Helper: Cân bằng & Tự bù clip giữ chuẩn 4.0s - 5.5s (Tối đa 6.0s) trong phạm vi Voice ──
+  // ── Helper: Cân bằng & Tự bù clip giữ chuẩn 4.0s - 5.5s (No-Freeze Frame) trong phạm vi Voice ──
   const rebalanceClips = useCallback(
     (clips: TimelineClipItem[]): TimelineClipItem[] => {
       const total = voiceDuration;
       if (total <= 0) return clips;
-      const idealClipDur = 5.0;
-      let neededCount = Math.max(1, Math.ceil(total / 5.5));
-      if (total / neededCount < 4.0 && neededCount > 1) {
-        neededCount = Math.max(1, Math.round(total / idealClipDur));
-      }
 
-      let workingClips = [...clips];
+      const idealClipDur = 5.0;
       const pool = (localAvailableSources && localAvailableSources.length > 0)
         ? localAvailableSources
         : (timelineData.availableSources && timelineData.availableSources.length > 0)
@@ -748,12 +743,10 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
             mediaType: c.mediaType,
           }));
 
-      let fillIdx = 0;
-      while (workingClips.length < neededCount) {
-        const src = pool[fillIdx % pool.length];
-        fillIdx++;
-        workingClips.push({
-          id: `clip_fill_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      let workingClips = [...clips];
+      if (workingClips.length === 0 && pool.length > 0) {
+        workingClips = pool.slice(0, 1).map((src) => ({
+          id: `clip_${Date.now()}`,
           sourceId: src.id,
           fileName: src.fileName,
           filePath: src.filePath,
@@ -765,41 +758,101 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
           sourceDuration: idealClipDur,
           aspectRatioType: src.aspectRatioType,
           mediaType: src.mediaType || (isImageFile(src.filePath) ? 'image' : 'video'),
-        });
+        }));
       }
 
-      const eachDur = total / workingClips.length;
+      const resultClips: TimelineClipItem[] = [];
       let curTime = 0;
+      let poolIdx = 0;
       const videoUsageCount: Record<string, number> = {};
+      let maxIter = 200;
 
-      return workingClips.map((c, i) => {
-        const isLast = i === workingClips.length - 1;
-        const thisDur = isLast ? Math.max(0.1, total - curTime) : eachDur;
-        const isImg = c.mediaType === 'image' || isImageFile(c.filePath);
+      while (curTime < total - 0.05 && maxIter-- > 0) {
+        const remaining = Number((total - curTime).toFixed(2));
+        if (remaining <= 0.05) break;
 
-        let srcStart = c.sourceStart || 0;
-        if (!isImg) {
-          const srcMatch = pool.find((p) => p.id === c.sourceId || p.filePath === c.filePath);
-          const srcTotalDur = srcMatch?.duration || 10;
-          if (srcTotalDur > thisDur) {
-            const usageIndex = videoUsageCount[c.filePath] || 0;
-            videoUsageCount[c.filePath] = usageIndex + 1;
-            const maxStart = Math.max(0, srcTotalDur - thisDur);
-            srcStart = (usageIndex * thisDur) % (maxStart + 0.1);
-            if (srcStart > maxStart) srcStart = maxStart;
+        // Ưu tiên lấy clip từ workingClips nếu có, nếu hết thì lấy từ pool
+        let baseClip: TimelineClipItem;
+        if (resultClips.length < workingClips.length) {
+          baseClip = workingClips[resultClips.length];
+        } else {
+          const src = pool[poolIdx % pool.length];
+          poolIdx++;
+          baseClip = {
+            id: `clip_fill_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+            sourceId: src.id,
+            fileName: src.fileName,
+            filePath: src.filePath,
+            thumbnailPath: src.thumbnailPath,
+            stage: src.stage,
+            timelineStart: 0,
+            timelineEnd: 0,
+            sourceStart: 0,
+            sourceDuration: idealClipDur,
+            aspectRatioType: src.aspectRatioType,
+            mediaType: src.mediaType || (isImageFile(src.filePath) ? 'image' : 'video'),
+          };
+        }
+
+        const isImg = baseClip.mediaType === 'image' || isImageFile(baseClip.filePath);
+        const srcMatch = pool.find((p) => p.id === baseClip.sourceId || p.filePath === baseClip.filePath);
+        const rawVideoDur = srcMatch?.duration || baseClip.sourceDuration || 5.0;
+
+        let clipDur = idealClipDur;
+        let srcStart = 0;
+
+        if (isImg) {
+          clipDur = Math.min(remaining, idealClipDur);
+          srcStart = 0;
+        } else {
+          if (rawVideoDur <= 4.0) {
+            // [NO-FREEZE]: Video ngắn dùng đúng thời lượng thật
+            clipDur = Math.min(remaining, rawVideoDur);
+            srcStart = 0;
+          } else {
+            let targetSlice = idealClipDur;
+            if (remaining <= 5.5) {
+              targetSlice = remaining;
+            } else if (remaining < idealClipDur + 4.0) {
+              targetSlice = remaining / 2;
+            }
+
+            const maxStart = Math.max(0, rawVideoDur - targetSlice);
+            if (maxStart > 0) {
+              const usageIndex = videoUsageCount[baseClip.filePath] || 0;
+              videoUsageCount[baseClip.filePath] = usageIndex + 1;
+              srcStart = (usageIndex * targetSlice) % (maxStart + 0.1);
+              if (srcStart > maxStart) srcStart = maxStart;
+            } else {
+              srcStart = 0;
+            }
+
+            const maxAvailable = rawVideoDur - srcStart;
+            clipDur = Math.min(remaining, targetSlice, maxAvailable);
           }
         }
 
-        const newClip: TimelineClipItem = {
-          ...c,
+        clipDur = Math.max(0.5, Number(clipDur.toFixed(2)));
+
+        resultClips.push({
+          ...baseClip,
           timelineStart: Number(curTime.toFixed(2)),
-          timelineEnd: Number((curTime + thisDur).toFixed(2)),
+          timelineEnd: Number((curTime + clipDur).toFixed(2)),
           sourceStart: Number(srcStart.toFixed(2)),
-          sourceDuration: Number(thisDur.toFixed(2)),
-        };
-        curTime += thisDur;
-        return newClip;
-      });
+          sourceDuration: Number(clipDur.toFixed(2)),
+        });
+
+        curTime += clipDur;
+      }
+
+      // Khớp chính xác 100% total
+      if (resultClips.length > 0) {
+        const last = resultClips[resultClips.length - 1];
+        last.timelineEnd = Number(total.toFixed(2));
+        last.sourceDuration = Number((last.timelineEnd - last.timelineStart).toFixed(2));
+      }
+
+      return resultClips;
     },
     [voiceDuration, localAvailableSources, timelineData.availableSources]
   );
@@ -808,11 +861,17 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
   const recalcTimelinePositions = useCallback(
     (clips: TimelineClipItem[]): TimelineClipItem[] => {
       const total = voiceDuration;
-      const eachDur = total / clips.length;
+      if (total <= 0 || clips.length === 0) return clips;
+
+      const totalCurrentDuration = clips.reduce((sum, c) => sum + (c.sourceDuration || 5.0), 0);
+      const ratio = totalCurrentDuration > 0 ? total / totalCurrentDuration : 1.0;
+
       let curTime = 0;
       return clips.map((c, i) => {
         const isLast = i === clips.length - 1;
-        const thisDur = isLast ? Math.max(0.1, total - curTime) : eachDur;
+        const rawDur = (c.sourceDuration || 5.0) * ratio;
+        const thisDur = isLast ? Math.max(0.1, total - curTime) : rawDur;
+
         const newClip = {
           ...c,
           timelineStart: Number(curTime.toFixed(2)),

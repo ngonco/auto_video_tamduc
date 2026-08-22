@@ -434,7 +434,14 @@ Hệ thống đã tạo sẵn bộ công cụ sao lưu tự động toàn bộ m
     2. Nút chính `📁 Chọn File Trên Máy`: Mở hộp thoại native Windows OpenFileDialog để chọn nhanh từ ổ đĩa.
     3. Nút phụ `Tải Từ Trình Duyệt`: Duyệt file qua HTML5 file picker cho môi trường web.
   - Loại bỏ hoàn toàn sự trùng lặp và phân vân cho người dùng, tối ưu hóa không gian làm việc.
+- **Cơ Chế Phân Bổ Clip Động Chống Đứng Hình (No-Freeze Dynamic Storyline & Rendering Engine)**:
+  - Thuật toán Dynamic Duration Accumulator (`server/services/storyline-engine.ts`):
+    1. Video ngắn (< 4.0s): Dùng đúng thời lượng thực tế của video (ví dụ 1.8s, 2.5s) rồi lập tức chuyển sang video tiếp theo, không gán slot dài hơn khiến video bị đứng hình cuối đoạn. Tự động tăng số lượng clip để lấp đầy 100% thời lượng Voice.
+    2. Video dài (> 10s): Cắt thành các đoạn chuẩn 4.0s - 5.5s, tịnh tiến mốc `sourceStart` theo chu kỳ sử dụng và kiểm soát nghiêm ngặt `sourceStart + clipDuration <= videoDuration`.
+  - Đồng bộ trên Timeline Editor (`src/components/EditorView/TimelineEditor.tsx`): Hàm `rebalanceClips` và căn chỉnh timeline tôn trọng thời lượng tối đa của từng video nguồn.
+  - Render FFmpeg mượt mà (`server/services/render-service.ts`): Loại bỏ `-stream_loop -1`, cắt chính xác từng đoạn video mượt mà không lặp đứng frame.
 - **Build & Quality Assurance**: Dự án đã vượt qua bài kiểm tra `npx tsc --noEmit` và `npm run build` với 0 lỗi cú pháp, toàn bộ các luồng Thư viện, Tạo video nhanh, Dựng timeline và Xuất MP4 hoạt động trơn tru, ổn định tuyệt đối.
+
 
 
 
