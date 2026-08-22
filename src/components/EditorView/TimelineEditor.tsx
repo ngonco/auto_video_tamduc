@@ -109,11 +109,14 @@ interface SortableClipProps {
   totalClips: number;
   widthPx: number;
   isSelected?: boolean;
+  isResizingThis?: boolean;
+  resizingDuration?: number;
   onSelectClip: (id: string) => void;
   onMoveClip: (index: number, direction: 'left' | 'right') => void;
   onDeleteClip: (index: number) => void;
   onReplaceFromExplorer: (clipId: string) => void;
   onOpenProjectSourcesModal: (clipId: string) => void;
+  onStartResize?: (e: React.PointerEvent, clip: TimelineClipItem, handle: 'left' | 'right') => void;
 }
 
 const SortableClip: React.FC<SortableClipProps> = ({
@@ -122,11 +125,14 @@ const SortableClip: React.FC<SortableClipProps> = ({
   totalClips,
   widthPx,
   isSelected,
+  isResizingThis,
+  resizingDuration,
   onSelectClip,
   onMoveClip,
   onDeleteClip,
   onReplaceFromExplorer,
   onOpenProjectSourcesModal,
+  onStartResize,
 }) => {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: clip.id,
@@ -155,8 +161,8 @@ const SortableClip: React.FC<SortableClipProps> = ({
         e.stopPropagation();
         onSelectClip(clip.id);
       }}
-      title={`#${index + 1}: ${clip.fileName} (${clip.sourceDuration.toFixed(1)}s) - ${stageLabel} (Click để chọn)`}
-      className={`relative bg-slate-900/90 border rounded-lg flex flex-col overflow-hidden group cursor-grab active:cursor-grabbing select-none transition-all ${
+      title={`#${index + 1}: ${clip.fileName} (${clip.sourceDuration.toFixed(1)}s) - ${stageLabel} (Click để chọn, Kéo 2 cạnh để chỉnh thời lượng)`}
+      className={`relative bg-slate-900/90 border rounded-lg flex flex-col overflow-visible group cursor-grab active:cursor-grabbing select-none transition-all ${
         isDragging
           ? 'border-amber-400 ring-2 ring-amber-400/50 shadow-2xl shadow-amber-500/40'
           : isSelected
@@ -164,8 +170,15 @@ const SortableClip: React.FC<SortableClipProps> = ({
           : 'border-slate-700/80 hover:border-slate-500'
       }`}
     >
+      {/* Floating Tooltip khi đang kéo resize */}
+      {isResizingThis && resizingDuration !== undefined && (
+        <div className="absolute -top-7 left-1/2 -translate-x-1/2 z-50 bg-gradient-to-r from-amber-500 to-yellow-500 text-slate-950 px-2 py-0.5 rounded-md text-[10px] font-mono font-extrabold shadow-xl border border-white/40 whitespace-nowrap pointer-events-none">
+          ⏱️ {resizingDuration.toFixed(1)}s
+        </div>
+      )}
+
       {/* Stage top border accent */}
-      <div className="h-[3px] w-full flex-shrink-0" style={{ backgroundColor: stageColor }} />
+      <div className="h-[3px] w-full flex-shrink-0 rounded-t" style={{ backgroundColor: stageColor }} />
 
       {/* Grip header icon (hiển thị khi chiều rộng >= 30px) */}
       {widthPx >= 30 && (
@@ -215,6 +228,32 @@ const SortableClip: React.FC<SortableClipProps> = ({
             {stageLabel}
           </span>
         )}
+      </div>
+
+      {/* Left Resize Handle (Start / Duration) */}
+      <div
+        onPointerDown={(e) => {
+          e.stopPropagation();
+          onStartResize?.(e, clip, 'left');
+        }}
+        onMouseDown={(e) => e.stopPropagation()}
+        className="absolute top-0 bottom-0 left-0 w-3 hover:w-3.5 bg-emerald-500/0 hover:bg-emerald-500/30 active:bg-emerald-500/60 z-30 transition-all flex items-center justify-center cursor-ew-resize group/lhandle"
+        title="Kéo cạnh trái: Tinh chỉnh điểm bắt đầu (Start)"
+      >
+        <div className="w-[3px] h-6 rounded-full bg-emerald-400 opacity-0 group-hover/lhandle:opacity-100 shadow-lg shadow-emerald-500/50 transition-opacity pointer-events-none" />
+      </div>
+
+      {/* Right Resize Handle (Duration / End) */}
+      <div
+        onPointerDown={(e) => {
+          e.stopPropagation();
+          onStartResize?.(e, clip, 'right');
+        }}
+        onMouseDown={(e) => e.stopPropagation()}
+        className="absolute top-0 bottom-0 right-0 w-3 hover:w-3.5 bg-amber-500/0 hover:bg-amber-500/30 active:bg-amber-500/60 z-30 transition-all flex items-center justify-center cursor-ew-resize group/rhandle"
+        title="Kéo cạnh phải: Kéo dài / Thu ngắn thời lượng clip"
+      >
+        <div className="w-[3px] h-6 rounded-full bg-amber-400 opacity-0 group-hover/rhandle:opacity-100 shadow-lg shadow-amber-500/50 transition-opacity pointer-events-none" />
       </div>
 
       {/* Controls (hiển thị khi hover hoặc khi đang chọn, chiều rộng >= 40px) */}
@@ -572,6 +611,19 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
   const [isPanning, setIsPanning] = useState(false);
   const [panStart, setPanStart] = useState({ x: 0, scrollLeft: 0 });
 
+  // Clip Resizing State (Kéo Cạnh Trái / Phải)
+  const [resizingState, setResizingState] = useState<{
+    clipId: string;
+    handle: 'left' | 'right';
+    startX: number;
+    initialDuration: number;
+    initialSourceStart: number;
+    maxDuration: number;
+    rawFileDuration: number;
+    currentDuration: number;
+    currentSourceStart: number;
+  } | null>(null);
+
   // Ref for the timeline bottom area (for native wheel listener)
   const timelineAreaRef = useRef<HTMLDivElement>(null);
 
@@ -884,6 +936,193 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
     },
     [voiceDuration]
   );
+
+  // ── Resize / Kéo Dài / Thu Ngắn Clip (Ripple Push Engine) ──
+  const handleResizeClip = useCallback(
+    (clipId: string, newDuration: number, newSourceStart?: number) => {
+      const clips = [...timelineData.clips];
+      const targetIdx = clips.findIndex((c) => c.id === clipId);
+      if (targetIdx === -1) return;
+
+      const targetClip = clips[targetIdx];
+      const srcMatch = localAvailableSources.find((p) => p.id === targetClip.sourceId || p.filePath === targetClip.filePath);
+      const isImg = targetClip.mediaType === 'image' || isImageFile(targetClip.filePath);
+      const rawFileDur = isImg ? voiceDuration : (srcMatch?.duration || targetClip.sourceDuration || 5.0);
+
+      const maxDur = isImg ? voiceDuration : Math.max(0.5, rawFileDur - (newSourceStart ?? targetClip.sourceStart ?? 0));
+      const clampedDur = Math.max(0.5, Math.min(maxDur, Number(newDuration.toFixed(2))));
+      const clampedSourceStart =
+        newSourceStart !== undefined
+          ? Math.max(0, Math.min(rawFileDur - 0.5, Number(newSourceStart.toFixed(2))))
+          : targetClip.sourceStart;
+
+      // Cập nhật target clip
+      clips[targetIdx] = {
+        ...targetClip,
+        sourceDuration: clampedDur,
+        sourceStart: clampedSourceStart,
+      };
+
+      // Ripple push: Tính toán lại timelineStart & timelineEnd tuần tự
+      let curTime = 0;
+      for (let i = 0; i < targetIdx; i++) {
+        clips[i] = {
+          ...clips[i],
+          timelineStart: Number(curTime.toFixed(2)),
+          timelineEnd: Number((curTime + clips[i].sourceDuration).toFixed(2)),
+        };
+        curTime += clips[i].sourceDuration;
+      }
+
+      clips[targetIdx] = {
+        ...clips[targetIdx],
+        timelineStart: Number(curTime.toFixed(2)),
+        timelineEnd: Number((curTime + clampedDur).toFixed(2)),
+      };
+      curTime += clampedDur;
+
+      // Dời các clip phía sau
+      const laterClips: TimelineClipItem[] = [];
+      for (let i = targetIdx + 1; i < clips.length; i++) {
+        if (curTime < voiceDuration - 0.05) {
+          const remaining = Number((voiceDuration - curTime).toFixed(2));
+          const cDur = Math.min(clips[i].sourceDuration, remaining);
+          if (cDur >= 0.3) {
+            laterClips.push({
+              ...clips[i],
+              timelineStart: Number(curTime.toFixed(2)),
+              timelineEnd: Number((curTime + cDur).toFixed(2)),
+              sourceDuration: Number(cDur.toFixed(2)),
+            });
+            curTime += cDur;
+          }
+        }
+      }
+
+      let resultClips = [...clips.slice(0, targetIdx + 1), ...laterClips];
+
+      // Nếu thiếu thời gian so với Voice (khi thu ngắn clip)
+      if (curTime < voiceDuration - 0.05) {
+        const diff = Number((voiceDuration - curTime).toFixed(2));
+        if (resultClips.length > 0) {
+          const lastClip = resultClips[resultClips.length - 1];
+          const lastSrc = localAvailableSources.find((p) => p.id === lastClip.sourceId || p.filePath === lastClip.filePath);
+          const lastIsImg = lastClip.mediaType === 'image' || isImageFile(lastClip.filePath);
+          const lastMax = lastIsImg ? voiceDuration : (lastSrc?.duration || lastClip.sourceDuration || 5.0) - (lastClip.sourceStart || 0);
+
+          if (lastClip.sourceDuration + diff <= lastMax + 0.1) {
+            resultClips[resultClips.length - 1] = {
+              ...lastClip,
+              timelineEnd: Number(voiceDuration.toFixed(2)),
+              sourceDuration: Number((voiceDuration - lastClip.timelineStart).toFixed(2)),
+            };
+          } else {
+            const availableExtra = Math.max(0, lastMax - lastClip.sourceDuration);
+            if (availableExtra > 0.3) {
+              resultClips[resultClips.length - 1] = {
+                ...lastClip,
+                sourceDuration: Number((lastClip.sourceDuration + availableExtra).toFixed(2)),
+                timelineEnd: Number((lastClip.timelineStart + lastClip.sourceDuration + availableExtra).toFixed(2)),
+              };
+              curTime += availableExtra;
+            }
+            if (curTime < voiceDuration - 0.05 && localAvailableSources.length > 0) {
+              const fillSrc = localAvailableSources[(targetIdx + 1) % localAvailableSources.length];
+              const fillIsImg = fillSrc.mediaType === 'image' || isImageFile(fillSrc.filePath);
+              const fillDur = Number((voiceDuration - curTime).toFixed(2));
+              resultClips.push({
+                id: `clip_fill_${Date.now()}`,
+                sourceId: fillSrc.id,
+                fileName: fillSrc.fileName,
+                filePath: fillSrc.filePath,
+                thumbnailPath: fillSrc.thumbnailPath,
+                stage: fillSrc.stage,
+                timelineStart: Number(curTime.toFixed(2)),
+                timelineEnd: Number(voiceDuration.toFixed(2)),
+                sourceStart: 0,
+                sourceDuration: fillDur,
+                aspectRatioType: fillSrc.aspectRatioType,
+                mediaType: fillSrc.mediaType || (fillIsImg ? 'image' : 'video'),
+              });
+            } else if (resultClips.length > 0) {
+              resultClips[resultClips.length - 1].timelineEnd = Number(voiceDuration.toFixed(2));
+              resultClips[resultClips.length - 1].sourceDuration = Number((voiceDuration - resultClips[resultClips.length - 1].timelineStart).toFixed(2));
+            }
+          }
+        }
+      } else if (resultClips.length > 0) {
+        resultClips[resultClips.length - 1].timelineEnd = Number(voiceDuration.toFixed(2));
+        resultClips[resultClips.length - 1].sourceDuration = Number((voiceDuration - resultClips[resultClips.length - 1].timelineStart).toFixed(2));
+      }
+
+      onUpdateClips(resultClips);
+    },
+    [timelineData.clips, localAvailableSources, voiceDuration, onUpdateClips]
+  );
+
+  // ── Clip Resizing Interaction Handlers ──
+  const handleStartResize = useCallback(
+    (e: React.PointerEvent, clip: TimelineClipItem, handle: 'left' | 'right') => {
+      const srcMatch = localAvailableSources.find((p) => p.id === clip.sourceId || p.filePath === clip.filePath);
+      const isImg = clip.mediaType === 'image' || isImageFile(clip.filePath);
+      const rawFileDuration = isImg ? voiceDuration : (srcMatch?.duration || clip.sourceDuration || 5.0);
+      const maxDuration = isImg ? voiceDuration : Math.max(0.5, rawFileDuration - (clip.sourceStart || 0));
+
+      setResizingState({
+        clipId: clip.id,
+        handle,
+        startX: e.clientX,
+        initialDuration: clip.sourceDuration,
+        initialSourceStart: clip.sourceStart || 0,
+        maxDuration,
+        rawFileDuration,
+        currentDuration: clip.sourceDuration,
+        currentSourceStart: clip.sourceStart || 0,
+      });
+    },
+    [localAvailableSources, voiceDuration]
+  );
+
+  useEffect(() => {
+    if (!resizingState) return;
+
+    const handlePointerMove = (e: PointerEvent) => {
+      const deltaX = e.clientX - resizingState.startX;
+      const deltaSec = deltaX / pxPerSec;
+
+      if (resizingState.handle === 'right') {
+        const newDur = Math.max(0.5, Math.min(resizingState.maxDuration, resizingState.initialDuration + deltaSec));
+        setResizingState((prev) => (prev ? { ...prev, currentDuration: Number(newDur.toFixed(2)) } : null));
+      } else {
+        const newStart = Math.max(0, Math.min(resizingState.rawFileDuration - 0.5, resizingState.initialSourceStart + deltaSec));
+        const diff = resizingState.initialSourceStart - newStart;
+        const newDur = Math.max(0.5, Math.min(resizingState.rawFileDuration - newStart, resizingState.initialDuration + diff));
+        setResizingState((prev) =>
+          prev
+            ? {
+                ...prev,
+                currentSourceStart: Number(newStart.toFixed(2)),
+                currentDuration: Number(newDur.toFixed(2)),
+              }
+            : null
+        );
+      }
+    };
+
+    const handlePointerUp = () => {
+      if (resizingState) {
+        handleResizeClip(resizingState.clipId, resizingState.currentDuration, resizingState.currentSourceStart);
+        setResizingState(null);
+      }
+    };
+
+    window.addEventListener('pointermove', handlePointerMove);
+    window.addEventListener('pointerup', handlePointerUp);
+    return () => {
+      window.removeEventListener('pointermove', handlePointerMove);
+      window.removeEventListener('pointerup', handlePointerUp);
+    };
+  }, [resizingState, pxPerSec, handleResizeClip]);
 
   // ── Tự động chuẩn hóa lại clips & chữa lành thời lượng vượt quá file thực tế (No-Freeze) ──
   useEffect(() => {
@@ -1929,11 +2168,64 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
             {selectedClipId && (() => {
               const selIdx = timelineData.clips.findIndex((c) => c.id === selectedClipId);
               if (selIdx === -1) return null;
+              const selClip = timelineData.clips[selIdx];
+              const srcMatch = localAvailableSources.find((p) => p.id === selClip.sourceId || p.filePath === selClip.filePath);
+              const isImg = selClip.mediaType === 'image' || isImageFile(selClip.filePath);
+              const rawFileDur = isImg ? voiceDuration : (srcMatch?.duration || selClip.sourceDuration || 5.0);
+              const maxAvail = isImg ? voiceDuration : Math.max(0.5, rawFileDur - (selClip.sourceStart || 0));
+
               return (
-                <div className="flex items-center gap-1.5 bg-amber-500/10 border border-amber-500/40 rounded-lg px-2 py-0.5">
+                <div className="flex items-center gap-1.5 bg-amber-500/10 border border-amber-500/40 rounded-lg px-2 py-0.5 flex-wrap">
                   <span className="text-[10px] text-amber-300 font-bold font-sans">
                     Clip #{selIdx + 1}:
                   </span>
+
+                  {/* Điều chỉnh thời lượng */}
+                  <div className="flex items-center gap-1 bg-slate-900/90 border border-amber-500/30 rounded px-1.5 py-0.5">
+                    <span className="text-[10px] text-slate-400 font-sans">Dài:</span>
+                    <input
+                      type="number"
+                      min="0.5"
+                      max={Number(maxAvail.toFixed(1))}
+                      step="0.1"
+                      value={selClip.sourceDuration}
+                      onChange={(e) => {
+                        const val = parseFloat(e.target.value);
+                        if (!isNaN(val)) handleResizeClip(selClip.id, val);
+                      }}
+                      className="w-12 bg-slate-950 border border-slate-700 rounded px-1 text-center font-mono text-[10px] text-amber-300 font-bold outline-none focus:border-amber-500"
+                      title={`Nhập thời lượng clip (tối đa ${maxAvail.toFixed(1)}s)`}
+                    />
+                    <span className="text-[10px] font-mono text-amber-400">s</span>
+
+                    <button
+                      onClick={() => handleResizeClip(selClip.id, selClip.sourceDuration - 0.5)}
+                      disabled={selClip.sourceDuration <= 0.6}
+                      className="px-1 py-0.2 bg-slate-800 hover:bg-slate-700 disabled:opacity-30 text-slate-200 text-[9px] font-bold rounded cursor-pointer font-mono"
+                      title="Giảm 0.5s"
+                    >
+                      -0.5s
+                    </button>
+                    <button
+                      onClick={() => handleResizeClip(selClip.id, selClip.sourceDuration + 0.5)}
+                      disabled={selClip.sourceDuration >= maxAvail - 0.05}
+                      className="px-1 py-0.2 bg-slate-800 hover:bg-slate-700 disabled:opacity-30 text-slate-200 text-[9px] font-bold rounded cursor-pointer font-mono"
+                      title="Tăng 0.5s"
+                    >
+                      +0.5s
+                    </button>
+                    {!isImg && (
+                      <button
+                        onClick={() => handleResizeClip(selClip.id, maxAvail)}
+                        disabled={selClip.sourceDuration >= maxAvail - 0.05}
+                        className="px-1.5 py-0.2 bg-amber-500/20 hover:bg-amber-500/40 text-amber-300 disabled:opacity-30 text-[9px] font-extrabold rounded cursor-pointer font-sans"
+                        title={`Kéo dài tối đa theo file video gốc (${maxAvail.toFixed(1)}s)`}
+                      >
+                        ⚡ Max ({maxAvail.toFixed(1)}s)
+                      </button>
+                    )}
+                  </div>
+
                   <button
                     onClick={() => handleReplaceClipFromExplorer(selectedClipId)}
                     className="flex items-center gap-1 px-2 py-0.5 bg-amber-500/25 hover:bg-amber-500/40 text-amber-300 text-[10px] font-bold rounded border border-amber-500/40 transition cursor-pointer font-sans"
@@ -2165,7 +2457,9 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
                   >
                     <div className="flex h-full items-stretch py-1 gap-[1px]">
                       {timelineData.clips.map((clip, idx) => {
-                        const widthPx = clip.sourceDuration * pxPerSec;
+                        const isResizing = resizingState?.clipId === clip.id;
+                        const durationToUse = isResizing && resizingState ? resizingState.currentDuration : clip.sourceDuration;
+                        const widthPx = durationToUse * pxPerSec;
                         return (
                           <SortableClip
                             key={clip.id}
@@ -2174,11 +2468,14 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
                             totalClips={timelineData.clips.length}
                             widthPx={widthPx}
                             isSelected={selectedClipId === clip.id}
+                            isResizingThis={isResizing}
+                            resizingDuration={durationToUse}
                             onSelectClip={setSelectedClipId}
                             onMoveClip={handleMoveClip}
                             onDeleteClip={handleDeleteClip}
                             onReplaceFromExplorer={handleReplaceClipFromExplorer}
                             onOpenProjectSourcesModal={handleOpenProjectSourceModal}
+                            onStartResize={handleStartResize}
                           />
                         );
                       })}
@@ -2697,6 +2994,7 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
                   controls
                   autoPlay
                   playsInline
+                  crossOrigin="anonymous"
                   className="w-full h-full object-contain"
                 />
               </div>
@@ -2779,6 +3077,7 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
                 src={`/media/stream?path=${encodeURIComponent(trimModal.filePath)}`}
                 onTimeUpdate={handleTrimTimeUpdate}
                 playsInline
+                crossOrigin="anonymous"
                 className="w-full h-full object-contain"
                 onClick={handleToggleTrimPreview}
               />

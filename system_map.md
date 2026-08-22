@@ -450,6 +450,36 @@ Hệ thống đã tạo sẵn bộ công cụ sao lưu tự động toàn bộ m
   - **Nút "⚡ Nhúng AI Toàn Bộ Thư Viện"**:
     - Backend: Endpoint `POST /api/library/projects/scan-all` và `GET /api/library/projects/scan-all-status` quản lý tiến trình nhúng AI lần lượt cho tất cả công trình trong thư viện.
     - Frontend: Bổ sung nút bấm sang trọng `⚡ Nhúng AI Toàn Bộ` trên Header Thư Viện ([LibraryGrid.tsx](file:///d:/DONG%20GOI%20TAM%20THOI/Auto_Video_TamDuc/src/components/LibraryView/LibraryGrid.tsx)) kèm thanh tiến trình tổng thể hiển thị phần trăm và thông báo chi tiết theo thời gian thực.
+- **Khắc Phục Toàn Diện Lỗi Không Chạy Được Video Preview (Remotion Preview & Media Stream Engine)**:
+  - **Nguyên nhân gốc rễ**:
+    1. **Các file clip trong dự án cũ bị thiếu/xóa**: Một số dự án timeline cũ lưu trong bảng `voices` (cột `timeline_project_json`) chứa đường dẫn các clip đã bị dọn/xóa vật lý trên ổ cứng. Khi Remotion `<Video>` nạp clip bị thiếu, browser nhận mã lỗi 404. Cờ `pauseWhenBuffering` chờ đệm dữ liệu vô tận khiến toàn bộ Remotion Player bị treo/đứng đơ, không phát được tiếp.
+    2. **Endpoint `/media/stream` thiếu hỗ trợ đầy đủ Range & CORS**: Trình duyệt khi seek hoặc nạp media gửi các header Range phức tạp (`bytes=0-`, `bytes=-500`, range vượt kích thước file). Việc thiếu mã `416 Range Not Satisfiable`, thiếu `OPTIONS` preflight và thiếu các header `Access-Control-Expose-Headers: Content-Range, Content-Length, Accept-Ranges` khiến một số trình duyệt chặn phát media.
+    3. **Không có poster fallback khi video buffering**: Khi chuyển tiếp giữa các clip, nếu video mất vài mili-giây để decode thì màn hình có thể chớp đen.
+  - **Giải pháp xử lý triệt để**:
+    1. **Nâng cấp Backend Media Stream ([server/index.ts](file:///d:/DONG%20GOI%20TAM%20THOI/Auto_Video_TamDuc/server/index.ts))**:
+       - Bổ sung OPTIONS preflight handler và đầy đủ CORS headers (`Access-Control-Allow-Origin: *`, `Accept-Ranges: bytes`, `Access-Control-Expose-Headers`).
+       - Chuẩn hóa phân tích HTTP Range header, tự động xử lý open range, suffix range, và trả về mã chuẩn `416 Range Not Satisfiable` khi start >= fileSize.
+       - Gắn sự kiện `req.on('close', () => fileStream.destroy())` và bắt lỗi `fileStream.on('error')` để dọn sạch socket, loại bỏ hoàn toàn lỗi rò rỉ luồng khi tua video.
+    2. **Cơ chế Auto-Heal Dự Án Đã Lưu ([server/routes/generator.routes.ts](file:///d:/DONG%20GOI%20TAM%20THOI/Auto_Video_TamDuc/server/routes/generator.routes.ts))**:
+       - Triển khai hàm `healSavedProjectClips()`: Tự động kiểm tra từng clip khi khôi phục dự án (`/last-project`, `/voice-project/:id`, `/voices`). Nếu phát hiện clip trỏ tới file không còn trên đĩa, hệ thống tự động tìm và thay thế footage chuẩn từ SQLite (ưu tiên đúng Stage), đồng thời cập nhật lại CSDL để bảo toàn vĩnh viễn tính toàn vẹn của timeline.
+    3. **Tối ưu Remotion Preview Layer ([src/remotion/layers/VideoLayer.tsx](file:///d:/DONG%20GOI%20TAM%20THOI/Auto_Video_TamDuc/src/remotion/layers/VideoLayer.tsx) & [AudioLayer.tsx](file:///d:/DONG%20GOI%20TAM%20THOI/Auto_Video_TamDuc/src/remotion/layers/AudioLayer.tsx))**:
+       - Thêm lớp **Thumbnail Poster Background (`zIndex: 0`)**: Hiển thị ảnh bìa sắc nét tức thì bên dưới video, chuyển cảnh mượt mà không chớp đen.
+       - Thêm `crossOrigin="anonymous"`, `playsInline` và loại bỏ `pauseWhenBuffering` gây treo Player.
+       - Bổ sung `onError` handler bắt lỗi mềm cho thẻ `<Video>`, `<Img>` và `<Audio>`.
+    4. **Bổ sung Video Preview Trực Tiếp Trong Thư Viện ([LibraryGrid.tsx](file:///d:/DONG%20GOI%20TAM%20THOI/Auto_Video_TamDuc/src/components/LibraryView/LibraryGrid.tsx))**:
+       - Cho phép nhấp vào bất kỳ card video clip nào trong modal chi tiết công trình để mở modal xem trước video 9:16 chạy mượt mà ngay trong Thư viện.
+- **Tính Năng Kéo Dài / Tinh Chỉnh Thời Lượng Clip Source Trên Timeline (Left/Right Resize Handles & Ripple Push)**:
+  - **Tay kéo 2 đầu trực quan trên thẻ Clip ([TimelineEditor.tsx](file:///d:/DONG%20GOI%20TAM%20THOI/Auto_Video_TamDuc/src/components/EditorView/TimelineEditor.tsx))**:
+    + **Tay kéo đầu trái (Left Handle)**: Dải viền màu xanh lá với thanh chỉ thị sáng bóng, kéo để tinh chỉnh điểm bắt đầu footage (`sourceStart`) và thời lượng clip.
+    + **Tay kéo đầu phải (Right Handle)**: Dải viền màu vàng hổ phách, kéo để kéo dài hoặc thu ngắn thời lượng clip (`sourceDuration`).
+    + **Floating Tooltip thời gian thực**: Hiển thị số giây chính xác ngay phía trên thẻ clip khi đang kéo chuột/cảm ứng (`⏱️ 7.2s`).
+  - **Bộ điều khiển thời lượng trên thanh Quick Actions**:
+    + Khi chọn bất kỳ clip nào trên timeline, thanh công cụ hiển thị ô nhập số giây chi tiết (bước nhảy 0.1s), các nút tăng/giảm nhanh `-0.5s`, `+0.5s` và nút `⚡ Max ({N}s)` để lấy trọn vẹn độ dài video gốc chỉ với 1 click.
+  - **Thuật toán Ripple Push & Cân bằng Voice 100%**:
+    + Khi thời lượng một clip thay đổi, toàn bộ các clip phía sau dời theo nhịp (`timelineStart = prev.timelineEnd`).
+    + Tự động co clip cuối hoặc bù footage thông minh để tổng thời lượng clip luôn khớp chuẩn xác 100% với thời lượng Voice đọc.
+  - **Bảo vệ chống đứng hình (No-Freeze Guarantee)**:
+    + Giới hạn tối đa theo độ dài file video gốc thực tế (`realDuration - sourceStart`), đối với ảnh tĩnh cho phép kéo dài tùy ý, bảo đảm video preview và render không bao giờ bị đứng hình.
 - **Build & Quality Assurance**: Dự án đã vượt qua bài kiểm tra `npx tsc --noEmit` và `npm run build` với 0 lỗi cú pháp, toàn bộ các luồng Thư viện, Tạo video nhanh, Dựng timeline và Xuất MP4 hoạt động trơn tru, ổn định tuyệt đối.
 
 

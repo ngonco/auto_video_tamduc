@@ -171,6 +171,63 @@ generatorRouter.post('/pick-media', async (req, res) => {
   }
 });
 
+/**
+ * Tự động kiểm tra và chữa lành các clip trong dự án timeline đã lưu
+ * Nếu phát hiện clip trỏ tới file không còn tồn tại trên ổ cứng -> tự động tìm footage thay thế chuẩn từ SQLite
+ */
+function healSavedProjectClips(projectData: any, voiceId?: string): { projectData: any; healed: boolean } {
+  if (!projectData || !Array.isArray(projectData.clips) || projectData.clips.length === 0) {
+    return { projectData, healed: false };
+  }
+
+  let healed = false;
+  let allValidSources: any[] | null = null;
+
+  const validClips = projectData.clips.map((clip: any, idx: number) => {
+    if (!clip.filePath || !fs.existsSync(clip.filePath)) {
+      if (!allValidSources) {
+        allValidSources = db.prepare('SELECT * FROM video_sources').all().filter((s: any) => fs.existsSync(s.file_path));
+      }
+      if (allValidSources.length > 0) {
+        const stage = clip.stage || 'STAGE_2_ASSEMBLY_FINISHING';
+        const match = allValidSources.find((s: any) => s.stage === stage) || allValidSources[idx % allValidSources.length];
+        if (match) {
+          healed = true;
+          const isImg = Boolean(match.file_path.match(/\.(jpg|jpeg|png|webp|bmp)$/i));
+          return {
+            ...clip,
+            sourceId: match.id,
+            fileName: match.file_name,
+            filePath: match.file_path,
+            thumbnailPath: match.thumbnail_path || '',
+            aspectRatioType: match.aspect_ratio_type || '9:16',
+            mediaType: isImg ? 'image' : 'video',
+            sourceStart: 0,
+            sourceDuration: Number((clip.timelineEnd - clip.timelineStart).toFixed(2)),
+          };
+        }
+      }
+    }
+    return clip;
+  });
+
+  const updatedData = {
+    ...projectData,
+    clips: validClips,
+  };
+
+  if (healed && voiceId) {
+    try {
+      db.prepare('UPDATE voices SET timeline_project_json = ? WHERE id = ?').run(
+        JSON.stringify(updatedData),
+        voiceId
+      );
+    } catch (_) {}
+  }
+
+  return { projectData: updatedData, healed };
+}
+
 // 3. Lấy danh sách các Voice đã nạp (Ghi nhớ / Lịch sử Voice)
 generatorRouter.get('/voices', (req, res) => {
   try {
@@ -196,8 +253,12 @@ generatorRouter.get('/voices', (req, res) => {
       }
 
       let timelineProject = v.timeline_project_json ? JSON.parse(v.timeline_project_json) : null;
-      if (timelineProject && timelineProject.projectName) {
-        timelineProject.projectName = fixUtf8Filename(timelineProject.projectName);
+      if (timelineProject) {
+        if (timelineProject.projectName) {
+          timelineProject.projectName = fixUtf8Filename(timelineProject.projectName);
+        }
+        const healedResult = healSavedProjectClips(timelineProject, v.id);
+        timelineProject = healedResult.projectData;
       }
 
       return {
@@ -604,7 +665,12 @@ generatorRouter.get('/last-project', (req, res) => {
       return res.json({ success: false, message: 'Không tìm thấy dữ liệu dự án đã lưu' });
     }
 
-    const projectData = JSON.parse(voiceRecord.timeline_project_json);
+    let projectData = JSON.parse(voiceRecord.timeline_project_json);
+    if (projectData) {
+      const healedResult = healSavedProjectClips(projectData, voiceRecord.id);
+      projectData = healedResult.projectData;
+    }
+
     res.json({
       success: true,
       data: projectData,
@@ -629,7 +695,12 @@ generatorRouter.get('/voice-project/:id', (req, res) => {
       return res.status(404).json({ success: false, error: 'Voice này chưa có dự án timeline được lưu' });
     }
 
-    const projectData = JSON.parse(voiceRecord.timeline_project_json);
+    let projectData = JSON.parse(voiceRecord.timeline_project_json);
+    if (projectData) {
+      const healedResult = healSavedProjectClips(projectData, voiceRecord.id);
+      projectData = healedResult.projectData;
+    }
+
     res.json({
       success: true,
       data: projectData,

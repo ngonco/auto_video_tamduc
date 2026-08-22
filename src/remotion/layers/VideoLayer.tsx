@@ -32,7 +32,8 @@ const SingleClipView: React.FC<SingleClipViewProps> = ({
 }) => {
   const frame = useCurrentFrame();
   const isImage = clip.mediaType === 'image' || isImageFile(clip.filePath);
-  const mediaSrc = `/media/stream?path=${encodeURIComponent(clip.filePath)}`;
+  const mediaSrc = clip.filePath ? `/media/stream?path=${encodeURIComponent(clip.filePath)}` : '';
+  const thumbSrc = clip.thumbnailPath ? `/media/thumbnails/${clip.thumbnailPath.split(/[\\/]/).pop()}` : '';
 
   // Hiệu ứng Zoom nhẹ (Ken Burns scale 1.0x -> 1.10x) cho ảnh tĩnh
   const progress = durationFrames > 0 ? Math.max(0, Math.min(1, frame / durationFrames)) : 0;
@@ -70,30 +71,59 @@ const SingleClipView: React.FC<SingleClipViewProps> = ({
           transform: `scale(${zoomScale})`,
           transformOrigin: 'center center',
           overflow: 'hidden',
+          position: 'relative',
         }}
       >
+        {/* Lớp Thumbnail Poster Background hiển thị tức thì khi tải/buffer */}
+        {thumbSrc && (
+          <img
+            src={thumbSrc}
+            alt=""
+            style={{
+              position: 'absolute',
+              top: 0,
+              left: 0,
+              width: '100%',
+              height: '100%',
+              objectFit: 'cover',
+              zIndex: 0,
+            }}
+          />
+        )}
+
         {isImage ? (
-          <Img
-            src={mediaSrc}
-            style={{
-              width: '100%',
-              height: '100%',
-              objectFit: 'cover',
-            }}
-          />
+          mediaSrc ? (
+            <Img
+              src={mediaSrc}
+              style={{
+                position: 'relative',
+                zIndex: 1,
+                width: '100%',
+                height: '100%',
+                objectFit: 'cover',
+              }}
+              onError={(err) => console.warn('[VideoLayer] Error loading image clip:', clip.fileName, err)}
+            />
+          ) : null
         ) : (
-          <Video
-            src={mediaSrc}
-            startFrom={startFromFrame}
-            volume={clip.isOutro ? 1.0 : 0}
-            muted={!clip.isOutro}
-            pauseWhenBuffering
-            style={{
-              width: '100%',
-              height: '100%',
-              objectFit: 'cover',
-            }}
-          />
+          mediaSrc ? (
+            <Video
+              src={mediaSrc}
+              startFrom={startFromFrame}
+              volume={clip.isOutro ? 1.0 : 0}
+              muted={!clip.isOutro}
+              crossOrigin="anonymous"
+              playsInline
+              style={{
+                position: 'relative',
+                zIndex: 1,
+                width: '100%',
+                height: '100%',
+                objectFit: 'cover',
+              }}
+              onError={(err) => console.warn('[VideoLayer] Error loading video clip:', clip.fileName, err)}
+            />
+          ) : null
         )}
       </div>
     </div>

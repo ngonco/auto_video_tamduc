@@ -52,14 +52,32 @@ app.use('/media/uploads', express.static(UPLOADS_DIR));
 app.use('/media/bgm', express.static(BGM_DIR));
 app.use('/media/exports', express.static(exportStaticDir));
 
-// Video streaming endpoint với HTTP Range support (hỗ trợ preview mượt mà trên browser/remotion player)
+// Video streaming endpoint với HTTP Range support & CORS headers (hỗ trợ preview mượt mà trên browser/remotion player)
+app.options('/media/stream', (req, res) => {
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Range, Origin, X-Requested-With, Content-Type, Accept');
+  res.sendStatus(204);
+});
+
 app.get('/media/stream', (req, res) => {
-  const filePath = req.query.path as string;
-  if (!filePath || !fs.existsSync(filePath)) {
-    return res.status(404).send('Video file not found');
+  const rawPath = req.query.path as string;
+  if (!rawPath) {
+    return res.status(400).header('Access-Control-Allow-Origin', '*').json({ error: 'Missing path parameter' });
   }
 
-  const stat = fs.statSync(filePath);
+  const filePath = path.normalize(rawPath);
+  if (!fs.existsSync(filePath)) {
+    return res.status(404).header('Access-Control-Allow-Origin', '*').json({ error: 'Video file not found', path: filePath });
+  }
+
+  let stat: fs.Stats;
+  try {
+    stat = fs.statSync(filePath);
+  } catch (err: any) {
+    return res.status(500).header('Access-Control-Allow-Origin', '*').json({ error: 'Failed to stat file', message: err.message });
+  }
+
   const fileSize = stat.size;
   const range = req.headers.range;
 
@@ -76,31 +94,84 @@ app.get('/media/stream', (req, res) => {
   else if (ext === '.webp') contentType = 'image/webp';
   else if (ext === '.bmp') contentType = 'image/bmp';
 
+  const commonHeaders: Record<string, string | number> = {
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Methods': 'GET, HEAD, OPTIONS',
+    'Access-Control-Allow-Headers': 'Range, Origin, X-Requested-With, Content-Type, Accept',
+    'Access-Control-Expose-Headers': 'Content-Range, Content-Length, Accept-Ranges',
+    'Accept-Ranges': 'bytes',
+    'Content-Type': contentType,
+    'Cache-Control': 'public, max-age=86400',
+  };
 
   if (range) {
-    const parts = range.replace(/bytes=/, '').split('-');
-    const start = parseInt(parts[0], 10);
-    const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
-    const chunksize = end - start + 1;
-    const file = fs.createReadStream(filePath, { start, end });
-    const head = {
+    const matches = range.match(/bytes=(\d*)-(\d*)/);
+    if (!matches) {
+      // Malformed range
+      res.writeHead(416, {
+        ...commonHeaders,
+        'Content-Range': `bytes */${fileSize}`,
+      });
+      return res.end();
+    }
+
+    let start = matches[1] ? parseInt(matches[1], 10) : NaN;
+    let end = matches[2] ? parseInt(matches[2], 10) : NaN;
+
+    if (isNaN(start)) {
+      // Suffix range: bytes=-500 (last 500 bytes)
+      start = Math.max(0, fileSize - end);
+      end = fileSize - 1;
+    } else if (isNaN(end)) {
+      // Open range: bytes=500- (from 500 to EOF)
+      end = fileSize - 1;
+    }
+
+    if (start >= fileSize || start < 0 || end < start) {
+      res.writeHead(416, {
+        ...commonHeaders,
+        'Content-Range': `bytes */${fileSize}`,
+      });
+      return res.end();
+    }
+
+    end = Math.min(end, fileSize - 1);
+    const chunkSize = end - start + 1;
+
+    res.writeHead(206, {
+      ...commonHeaders,
       'Content-Range': `bytes ${start}-${end}/${fileSize}`,
-      'Accept-Ranges': 'bytes',
-      'Content-Length': chunksize,
-      'Content-Type': contentType,
-      'Cache-Control': 'public, max-age=86400',
-    };
-    res.writeHead(206, head);
-    file.pipe(res);
+      'Content-Length': chunkSize,
+    });
+
+    const fileStream = fs.createReadStream(filePath, { start, end });
+    req.on('close', () => {
+      fileStream.destroy();
+    });
+    fileStream.on('error', (streamErr) => {
+      console.warn('[MediaStream] Stream error:', streamErr);
+      if (!res.headersSent) {
+        res.status(500).end();
+      }
+    });
+    fileStream.pipe(res);
   } else {
-    const head = {
+    res.writeHead(200, {
+      ...commonHeaders,
       'Content-Length': fileSize,
-      'Content-Type': contentType,
-      'Accept-Ranges': 'bytes',
-      'Cache-Control': 'public, max-age=86400',
-    };
-    res.writeHead(200, head);
-    fs.createReadStream(filePath).pipe(res);
+    });
+
+    const fileStream = fs.createReadStream(filePath);
+    req.on('close', () => {
+      fileStream.destroy();
+    });
+    fileStream.on('error', (streamErr) => {
+      console.warn('[MediaStream] Stream error:', streamErr);
+      if (!res.headersSent) {
+        res.status(500).end();
+      }
+    });
+    fileStream.pipe(res);
   }
 });
 

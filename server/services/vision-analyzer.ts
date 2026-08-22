@@ -53,7 +53,11 @@ YÊU CẦU TRẢ VỀ DUY NHẤT 1 ĐỐI TƯỢNG JSON:
 `;
 
   try {
-    const content = await callVilaoChatCompletion({
+    const timeoutPromise = new Promise<string>((_, reject) =>
+      setTimeout(() => reject(new Error('AI Vision Gateway Timeout (12s)')), 12000)
+    );
+
+    const apiPromise = callVilaoChatCompletion({
       model: AI_MODELS.VISION,
       serviceType: 'EMBEDDING',
       messages: [
@@ -67,6 +71,8 @@ YÊU CẦU TRẢ VỀ DUY NHẤT 1 ĐỐI TƯỢNG JSON:
       ],
       temperature: 0.2,
     });
+
+    const content = await Promise.race([apiPromise, timeoutPromise]);
 
     let jsonStr = content.trim();
     // Bóc JSON nếu có markdown block ```json ... ```
@@ -82,8 +88,8 @@ YÊU CẦU TRẢ VỀ DUY NHẤT 1 ĐỐI TƯỢNG JSON:
       aestheticScore: Number(parsed.aestheticScore) || 7.5,
       description: parsed.description || 'Không gian thờ Phật',
     };
-  } catch (error) {
-    console.error('[VisionAnalyzer] Error analyzing frames:', error);
+  } catch (error: any) {
+    console.warn('[VisionAnalyzer] Warning analyzing frames, using safe default:', error.message);
     return {
       stage: 'STAGE_2_ASSEMBLY_FINISHING',
       stageName: 'Lắp ráp hoàn thiện tủ thờ',

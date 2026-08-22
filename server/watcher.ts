@@ -205,10 +205,21 @@ export class FolderWatcherService {
           return;
         }
 
+        // [TỐI ƯU SIÊU NHANH]: Nếu clip đã được phân tích trước đó và có thumbnail hợp lệ -> Bỏ qua không gọi lại AI
+        if (video.is_analyzed === 1 && video.stage && video.thumbnail_path && fs.existsSync(video.thumbnail_path)) {
+          stageCounts[video.stage] = (stageCounts[video.stage] || 0) + 1;
+          completed++;
+          if (onProgress) {
+            const pct = 5 + Math.round((completed / videos.length) * 90);
+            onProgress(Math.min(95, pct), `Đã sẵn sàng clip ${completed}/${videos.length}: ${video.file_name}`);
+          }
+          return;
+        }
+
         // Trích xuất 2-3 frame ảnh đại diện
         const { framePaths, thumbnailPath } = await extractKeyframes(video.file_path, video.id, meta.duration);
 
-        // Gọi AI Vision phân tích cảnh (chỉ gửi frame ảnh)
+        // Gọi AI Vision phân tích cảnh (chỉ gửi frame ảnh, có timeout an toàn)
         const analysis = await analyzeVideoFrames(framePaths);
 
         // Lưu vào DB
@@ -231,8 +242,8 @@ export class FolderWatcherService {
         );
 
         stageCounts[analysis.stage] = (stageCounts[analysis.stage] || 0) + 1;
-      } catch (err) {
-        console.error(`[Watcher] Error embedding video ${video.file_name}:`, err);
+      } catch (err: any) {
+        console.error(`[Watcher] Error embedding video ${video.file_name}:`, err.message);
       }
 
       completed++;
@@ -256,7 +267,7 @@ export class FolderWatcherService {
   }
 
   /**
-   * Quét và Nhúng AI cho TOÀN BỘ Thư Viện (Tất cả công trình)
+   * Quét và Nhúng AI cho TOÀN BỘ Thư Viện (Tất cả công trình) với tiến độ toàn cục mượt mà
    */
   public async scanAndEmbedAllProjects(onProgress?: (percent: number, message: string) => void): Promise<void> {
     const projects: any[] = db.prepare('SELECT id, folder_name FROM projects ORDER BY created_at ASC').all();
@@ -264,29 +275,39 @@ export class FolderWatcherService {
       throw new Error('Chưa có công trình nào trong thư viện.');
     }
 
+    const totalVideosAcrossAll = (db.prepare('SELECT COUNT(*) as c FROM video_sources').get() as any)?.c || 1;
+    let globalCompletedVideos = 0;
+
     if (onProgress) {
-      onProgress(2, `Bắt đầu phân tích AI cho toàn bộ ${projects.length} công trình...`);
+      onProgress(3, `Bắt đầu phân tích AI toàn bộ ${projects.length} công trình (${totalVideosAcrossAll} clips)...`);
     }
 
     for (let i = 0; i < projects.length; i++) {
       const proj = projects[i];
-      const basePct = Math.round((i / projects.length) * 100);
-      const nextPct = Math.round(((i + 1) / projects.length) * 100);
 
       try {
-        await this.scanAndEmbedProject(proj.id, (subPct, subMsg) => {
+        await this.scanAndEmbedProject(proj.id, (_subPct, subMsg) => {
           if (onProgress) {
-            const overallPct = Math.min(99, Math.round(basePct + (subPct / 100) * (nextPct - basePct)));
+            const currentTotalDone = Math.min(totalVideosAcrossAll, globalCompletedVideos + 1);
+            const overallPct = Math.min(99, Math.max(3, Math.round((currentTotalDone / totalVideosAcrossAll) * 100)));
             onProgress(overallPct, `[${i + 1}/${projects.length} - ${proj.folder_name}]: ${subMsg}`);
           }
         });
       } catch (err: any) {
         console.error(`[Watcher] Error scanning project ${proj.folder_name} in batch:`, err.message);
       }
+
+      const projVideoCount = (db.prepare('SELECT COUNT(*) as c FROM video_sources WHERE project_id = ?').get(proj.id) as any)?.c || 0;
+      globalCompletedVideos += projVideoCount;
+
+      if (onProgress) {
+        const overallPct = Math.min(99, Math.max(3, Math.round((globalCompletedVideos / totalVideosAcrossAll) * 100)));
+        onProgress(overallPct, `Đã hoàn thành công trình [${i + 1}/${projects.length}]: ${proj.folder_name}`);
+      }
     }
 
     if (onProgress) {
-      onProgress(100, 'Đã hoàn tất phân tích AI cho toàn bộ thư viện!');
+      onProgress(100, 'Đã hoàn tất phân tích AI và dọn dẹp cho toàn bộ thư viện!');
     }
   }
 

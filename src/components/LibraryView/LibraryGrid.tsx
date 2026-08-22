@@ -30,6 +30,7 @@ interface ProjectItem {
 interface VideoSourceItem {
   id: string;
   file_name: string;
+  file_path: string;
   duration: number;
   width: number;
   height: number;
@@ -59,6 +60,7 @@ export const LibraryGrid: React.FC<LibraryGridProps> = ({ onSelectProjectForGene
   const [selectedProjectDetail, setSelectedProjectDetail] = useState<ProjectItem | null>(null);
   const [projectVideos, setProjectVideos] = useState<VideoSourceItem[]>([]);
   const [loadingVideos, setLoadingVideos] = useState(false);
+  const [previewVideoItem, setPreviewVideoItem] = useState<VideoSourceItem | null>(null);
   const [toast, setToast] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
   const fetchProjects = async () => {
@@ -560,22 +562,26 @@ export const LibraryGrid: React.FC<LibraryGridProps> = ({ onSelectProjectForGene
                     return (
                       <div
                         key={vid.id}
-                        className="bg-slate-900/80 border border-slate-800 rounded-xl overflow-hidden text-xs"
+                        onClick={() => setPreviewVideoItem(vid)}
+                        className="bg-slate-900/80 border border-slate-800 hover:border-amber-500/50 rounded-xl overflow-hidden text-xs cursor-pointer transition group"
                       >
-                        <div className="h-32 bg-black relative">
+                        <div className="h-32 bg-black relative overflow-hidden">
                           {vid.thumbnail_path && (
                             <img
                               src={`/media/thumbnails/${vid.thumbnail_path.split(/[\\/]/).pop()}`}
                               alt={vid.file_name}
-                              className="w-full h-full object-cover"
+                              className="w-full h-full object-cover group-hover:scale-105 transition duration-300"
                             />
                           )}
+                          <div className="absolute inset-0 bg-black/30 opacity-0 group-hover:opacity-100 transition flex items-center justify-center">
+                            <span className="p-2 rounded-full bg-amber-500 text-slate-950 font-bold shadow-lg">▶</span>
+                          </div>
                           <div className="absolute bottom-2 right-2 bg-black/80 px-2 py-0.5 rounded text-[10px] text-white">
                             {vid.duration.toFixed(1)}s • {vid.aspect_ratio_type}
                           </div>
                         </div>
                         <div className="p-3">
-                          <p className="font-semibold text-slate-200 line-clamp-1">{vid.file_name}</p>
+                          <p className="font-semibold text-slate-200 line-clamp-1 group-hover:text-amber-300 transition">{vid.file_name}</p>
                           <span className={`inline-block text-[10px] px-2 py-0.5 rounded mt-1.5 font-medium border ${stageInfo.color}`}>
                             {stageInfo.label}
                           </span>
@@ -609,6 +615,56 @@ export const LibraryGrid: React.FC<LibraryGridProps> = ({ onSelectProjectForGene
                 className="px-5 py-2 bg-amber-500 hover:bg-amber-600 text-slate-950 rounded-xl text-xs font-bold shadow-lg shadow-amber-500/20"
               >
                 Sử Dụng Công Trình Này Để Dựng Video ➔
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Preview Video Clip Trực Tiếp Trong Thư Viện */}
+      {previewVideoItem && (
+        <div className="fixed inset-0 z-50 bg-black/90 backdrop-blur-md flex items-center justify-center p-4">
+          <div className="bg-[#151D2E] border border-amber-500/40 rounded-2xl max-w-lg w-full overflow-hidden shadow-2xl flex flex-col animate-in fade-in zoom-in duration-150">
+            <div className="p-4 border-b border-slate-800 flex items-center justify-between bg-slate-900/60">
+              <div className="truncate pr-2">
+                <h4 className="text-sm font-bold text-amber-300 truncate">{previewVideoItem.file_name}</h4>
+                <p className="text-[11px] text-slate-400 font-mono mt-0.5">
+                  {previewVideoItem.duration.toFixed(1)}s • {previewVideoItem.aspect_ratio_type}
+                </p>
+              </div>
+              <button
+                onClick={() => setPreviewVideoItem(null)}
+                className="w-8 h-8 rounded-full bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white flex items-center justify-center text-xs font-bold cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+            <div className="p-4 bg-black flex items-center justify-center">
+              <div className="max-h-[60vh] aspect-[9/16] max-w-full flex items-center justify-center rounded-xl overflow-hidden bg-slate-950 border border-slate-800">
+                {previewVideoItem.file_path.match(/\.(jpg|jpeg|png|webp|bmp)$/i) ? (
+                  <img
+                    src={`/media/stream?path=${encodeURIComponent(previewVideoItem.file_path)}`}
+                    alt={previewVideoItem.file_name}
+                    className="w-full h-full object-contain"
+                  />
+                ) : (
+                  <video
+                    src={`/media/stream?path=${encodeURIComponent(previewVideoItem.file_path)}`}
+                    controls
+                    autoPlay
+                    playsInline
+                    crossOrigin="anonymous"
+                    className="w-full h-full object-contain"
+                  />
+                )}
+              </div>
+            </div>
+            <div className="p-3 border-t border-slate-800 bg-slate-900/60 flex justify-end">
+              <button
+                onClick={() => setPreviewVideoItem(null)}
+                className="px-4 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold rounded-lg"
+              >
+                Đóng
               </button>
             </div>
           </div>

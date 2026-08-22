@@ -42,7 +42,7 @@ export const AudioLayer: React.FC<AudioLayerProps> = React.memo(({
             key={voiceUrl}
             src={voiceUrl}
             volume={voiceVolume}
-            pauseWhenBuffering
+            onError={(err) => console.warn('[AudioLayer] Voice audio error:', voiceUrl, err)}
           />
         </Sequence>
       )}
@@ -53,7 +53,7 @@ export const AudioLayer: React.FC<AudioLayerProps> = React.memo(({
             src={bgmUrl}
             volume={currentBgmVolume}
             loop
-            pauseWhenBuffering
+            onError={(err) => console.warn('[AudioLayer] BGM audio error:', bgmUrl, err)}
           />
         </Sequence>
       )}
