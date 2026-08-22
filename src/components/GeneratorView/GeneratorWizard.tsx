@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   Upload,
   Music,
@@ -28,7 +28,8 @@ import {
   List,
   Plus,
   ShieldCheck,
-  ArrowDownToLine
+  ArrowDownToLine,
+  Loader2
 } from 'lucide-react';
 import { SubtitleLine } from '../../remotion/types.js';
 
@@ -95,6 +96,8 @@ export const GeneratorWizard: React.FC<GeneratorWizardProps> = ({
   const [voicePath, setVoicePath] = useState<string>('');
   const [voiceDuration, setVoiceDuration] = useState<number>(0);
   const [uploading, setUploading] = useState(false);
+  const [isDraggingVoice, setIsDraggingVoice] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // STT & Subtitle states
   const [processingSTT, setProcessingSTT] = useState(false);
@@ -186,9 +189,8 @@ export const GeneratorWizard: React.FC<GeneratorWizardProps> = ({
     }
   };
 
-  // 2. Upload file voice từ trình duyệt
-  const handleVoiceSelected = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
+  // 2. Upload file voice từ kéo thả hoặc input
+  const uploadVoiceFile = async (file: File) => {
     if (!file) return;
 
     setErrorMsg('');
@@ -208,6 +210,7 @@ export const GeneratorWizard: React.FC<GeneratorWizardProps> = ({
       const data = await res.json();
       if (data.success) {
         setVoicePath(data.file.filePath);
+        setVoiceName(data.file.originalName);
         // Tự động nhận diện & sửa phụ đề
         processVoiceFile(data.file.filePath, data.file.originalName);
       } else {
@@ -217,6 +220,13 @@ export const GeneratorWizard: React.FC<GeneratorWizardProps> = ({
       setErrorMsg(err.message);
     } finally {
       setUploading(false);
+    }
+  };
+
+  const handleVoiceSelected = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      await uploadVoiceFile(file);
     }
   };
 
@@ -525,46 +535,84 @@ export const GeneratorWizard: React.FC<GeneratorWizardProps> = ({
             )}
           </div>
 
-          {/* 2 Nút Chọn Voice */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
-            {/* Nút 1: Mở File Explorer trực tiếp trên máy */}
-            <button
-              onClick={handlePickVoiceFromFileSystem}
-              disabled={uploading || processingSTT}
-              className="p-5 bg-gradient-to-r from-amber-500/20 via-amber-500/10 to-transparent hover:from-amber-500/30 border-2 border-dashed border-amber-500/50 hover:border-amber-400 rounded-xl text-left transition flex items-center gap-4 group disabled:opacity-50"
-            >
-              <div className="w-12 h-12 rounded-xl bg-amber-500/20 text-amber-400 flex items-center justify-center flex-shrink-0 group-hover:scale-105 transition">
-                <FolderOpen className="w-6 h-6" />
-              </div>
-              <div>
-                <p className="text-xs font-bold text-slate-100 group-hover:text-amber-300 transition">
-                  📁 Chọn File Voice Trên Máy
-                </p>
-                <p className="text-[11px] text-slate-400 mt-0.5">
-                  Mở hộp thoại Windows để chọn nhanh từ thư mục audio
-                </p>
-              </div>
-            </button>
+          {/* KHUNG NẠP VOICE DUY NHẤT (UNIFIED DRAG & DROP + EXPLORER BROWSE ZONE) */}
+          <div
+            onDragOver={(e) => {
+              e.preventDefault();
+              setIsDraggingVoice(true);
+            }}
+            onDragLeave={(e) => {
+              e.preventDefault();
+              setIsDraggingVoice(false);
+            }}
+            onDrop={(e) => {
+              e.preventDefault();
+              setIsDraggingVoice(false);
+              const file = e.dataTransfer.files?.[0];
+              if (file) {
+                uploadVoiceFile(file);
+              }
+            }}
+            className={`relative mb-4 p-6 rounded-2xl border-2 border-dashed transition-all duration-200 text-center flex flex-col items-center justify-center gap-3 select-none ${
+              isDraggingVoice
+                ? 'border-amber-400 bg-amber-500/15 shadow-xl shadow-amber-500/20 scale-[1.01]'
+                : 'border-amber-500/40 hover:border-amber-400 bg-gradient-to-b from-amber-500/10 via-slate-900/60 to-slate-900/80 hover:bg-amber-500/15'
+            }`}
+          >
+            {/* Hidden native input for browser fallback */}
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="audio/*"
+              onChange={handleVoiceSelected}
+              className="hidden"
+            />
 
-            {/* Nút 2: Tải lên qua kéo thả */}
-            <div className="relative border-2 border-dashed border-slate-700 hover:border-slate-500 rounded-xl p-5 text-left transition bg-slate-900/40 group flex items-center gap-4 cursor-pointer">
-              <input
-                type="file"
-                accept="audio/*"
-                onChange={handleVoiceSelected}
-                className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
-              />
-              <div className="w-12 h-12 rounded-xl bg-slate-800 text-slate-400 flex items-center justify-center flex-shrink-0 group-hover:text-slate-200 transition">
-                <Upload className="w-6 h-6" />
-              </div>
-              <div>
-                <p className="text-xs font-bold text-slate-200 group-hover:text-slate-100 transition">
-                  ☁️ Tải Lên Từ Trình Duyệt
-                </p>
-                <p className="text-[11px] text-slate-400 mt-0.5">
-                  Kéo thả file âm thanh .mp3, .wav, .m4a vào đây
-                </p>
-              </div>
+            <div className="w-14 h-14 rounded-2xl bg-amber-500/20 text-amber-400 border border-amber-500/30 flex items-center justify-center shadow-lg shadow-amber-500/10">
+              {uploading || processingSTT ? (
+                <Loader2 className="w-7 h-7 animate-spin text-amber-400" />
+              ) : isDraggingVoice ? (
+                <Upload className="w-7 h-7 animate-bounce text-amber-300" />
+              ) : (
+                <Music className="w-7 h-7 text-amber-400" />
+              )}
+            </div>
+
+            <div className="max-w-md">
+              <p className="text-sm font-bold text-slate-100 mb-1">
+                {isDraggingVoice ? (
+                  <span className="text-amber-300 font-extrabold">Thả file âm thanh vào đây để nạp ngay!</span>
+                ) : (
+                  <span>Chọn hoặc Kéo Thả File Voice Tiếng Việt (.mp3, .wav, .m4a)</span>
+                )}
+              </p>
+              <p className="text-xs text-slate-400">
+                Kéo thả file âm thanh trực tiếp vào khung này hoặc bấm nút bên dưới để mở thư mục
+              </p>
+            </div>
+
+            <div className="flex items-center gap-3 mt-1">
+              <button
+                type="button"
+                onClick={handlePickVoiceFromFileSystem}
+                disabled={uploading || processingSTT}
+                className="px-4 py-2 bg-gradient-to-r from-amber-500 to-yellow-500 hover:from-amber-400 hover:to-yellow-400 text-slate-950 font-extrabold text-xs rounded-xl shadow-lg shadow-amber-500/20 transition flex items-center gap-2 cursor-pointer active:scale-95 disabled:opacity-50"
+                title="Mở hộp thoại Windows để chọn nhanh file voice từ ổ cứng"
+              >
+                <FolderOpen className="w-4 h-4 fill-current text-slate-950" />
+                <span>📁 Chọn File Trên Máy</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={uploading || processingSTT}
+                className="px-3 py-2 bg-slate-800/90 hover:bg-slate-700 text-slate-300 hover:text-white text-xs font-semibold rounded-xl border border-slate-700 transition flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                title="Chọn file qua trình duyệt web"
+              >
+                <Upload className="w-3.5 h-3.5 text-slate-400" />
+                <span>Tải Từ Trình Duyệt</span>
+              </button>
             </div>
           </div>
 

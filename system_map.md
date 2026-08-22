@@ -428,7 +428,14 @@ Hệ thống đã tạo sẵn bộ công cụ sao lưu tự động toàn bộ m
     1. Bổ sung hàm tiện ích `fixUtf8Filename()` trong `server/routes/generator.routes.ts` tự động phát hiện và giải mã nhị phân chuẩn xác sang UTF-8.
     2. Áp dụng `fixUtf8Filename()` xuyên suốt các điểm tiếp nhận: `/upload-voice`, `/pick-voice`, `/process-voice`, `/save-project` và `/voices`.
     3. Tự động kiểm tra và sửa chữa sạch sẽ các bản ghi có tên bị lỗi font trong CSDL SQLite khi truy vấn danh sách Voice.
+- **Hợp Nhất Khung Nạp Voice Tương Tác (Unified Voice Dropzone UI)**:
+  - Tối ưu hóa toàn diện Bước 1: Gộp 2 nút chọn file rời rạc trước đây thành **1 Khung Nạp Voice Duy Nhất** hỗ trợ tương tác đa phương thức:
+    1. Kéo thả file âm thanh (.mp3, .wav, .m4a) trực tiếp vào khung với phản hồi đồ họa viền sáng (Drag & drop visual feedback).
+    2. Nút chính `📁 Chọn File Trên Máy`: Mở hộp thoại native Windows OpenFileDialog để chọn nhanh từ ổ đĩa.
+    3. Nút phụ `Tải Từ Trình Duyệt`: Duyệt file qua HTML5 file picker cho môi trường web.
+  - Loại bỏ hoàn toàn sự trùng lặp và phân vân cho người dùng, tối ưu hóa không gian làm việc.
 - **Build & Quality Assurance**: Dự án đã vượt qua bài kiểm tra `npx tsc --noEmit` và `npm run build` với 0 lỗi cú pháp, toàn bộ các luồng Thư viện, Tạo video nhanh, Dựng timeline và Xuất MP4 hoạt động trơn tru, ổn định tuyệt đối.
+
 
 
 
