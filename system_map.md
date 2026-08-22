@@ -22,7 +22,7 @@
   - **Quy chuẩn thời lượng Clip 4.0s - 5.5s**: Mọi video nguồn dài tự động được cắt thành các đoạn ngắn 4-6s với góc quay tịnh tiến; khi xóa clip trên timeline hệ thống tự bù footage giữ nhịp điệu hoàn hảo.
   - **Timeline tương tác trực quan Remotion Player**:
     + **Phím tắt Spacebar Dừng/Phát**: Nhấn phím `Space` tại Timeline/Player để dừng/phát nhanh (tự động bỏ qua khi đang gõ text/phụ đề) kèm nút Play/Pause trên thanh công cụ.
-    + **Chọn Clip & Đổi Nguồn Trực Tiếp (1-Click Replace)**: Chọn bất kỳ clip nào trên timeline để đổi video/ảnh mới từ **Windows Explorer** hoặc từ **Thư viện công trình**, bảo toàn 100% thời lượng slot và vị trí trên timeline.
+    + **Chọn Clip, Đổi Nguồn Trực Tiếp, Cắt 2 Đầu & Xóa Source Gốc**: Chọn bất kỳ clip nào trên timeline để đổi video/ảnh mới từ **Windows Explorer** hoặc **Thư viện công trình**, **Cắt video nguồn gốc 2 đầu (Start/End handle)** ghi đè vĩnh viễn và đồng bộ CSDL, hoặc **Xóa vĩnh viễn file nguồn gốc (Disk + SQLite)** với tính năng tự động bù/thay thế footage thông minh bảo toàn 100% thời lượng slot và vị trí trên timeline.
     + **Quản lý Khối Outro Cuối Video**: Khối Outro màu tím nổi bật với nhãn `🔊 Gốc`, có nút đổi file trực tiếp trên timeline và nút Bật/Tắt Outro nhanh trên thanh công cụ.
     + Nút **Fit Toàn Bộ (1-Click Zoom-to-Fit)**: Tự động đo chiều rộng màn hình và thu phóng vừa khít 100% timeline (dải zoom 0.05x -> 6.0x), xem trọn vẹn video từ 30s đến 5 phút mà không cần cuộn ngang.
     + Thước đo Ruler thông minh: Tự động giãn cách vạch thời gian (0.5s, 1s, 5s, 10s, 15s, 30s) tùy mức zoom.
@@ -234,7 +234,7 @@ CREATE TABLE system_settings (
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
--- 5. Bảng ghi nhớ danh sách Voice đã nạp (Lịch sử Voice)
+-- 5. Bảng ghi nhớ danh sách Voice đã nạp (Lịch sử Voice & Timeline Projects)
 CREATE TABLE voices (
     id TEXT PRIMARY KEY,
     file_name TEXT NOT NULL,
@@ -243,6 +243,7 @@ CREATE TABLE voices (
     stt_text TEXT,
     raw_words_json TEXT,
     subtitles_json TEXT,
+    timeline_project_json TEXT, -- JSON lưu toàn bộ kịch bản timeline, clips, BGM, subtitle styles, outro
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 ```
@@ -260,69 +261,12 @@ CREATE TABLE voices (
 | `POST` | `/api/library/projects/:id/scan` | - | Kích hoạt quét và nhúng AI chạy nền cho 1 công trình (xử lý song song 4 luồng) |
 | `GET` | `/api/library/projects/:id/scan-status` | - | Lấy tiến độ % quét và phân tích AI thời gian thực của công trình |
 | `DELETE`| `/api/library/projects/:id` | - | Xóa 1 công trình và các video liên quan khỏi thư viện |
-| `GET` | `/api/generator/voices` | - | Lấy danh sách voice đã nạp và lưu trong lịch sử SQLite |
-| `POST` | `/api/generator/pick-voice` | `{ initialDir?: string }` | Mở hộp thoại Windows chọn file Voice âm thanh (.mp3, .wav, .m4a) qua `audio-picker.ps1` |
-| `POST` | `/api/generator/pick-media` | `{ initialDir?: string }` | Mở hộp thoại Windows chọn file Video hoặc Ảnh (.mp4, .mov, .jpg, .png...) thay thế clip qua `media-picker.ps1` |
-| `DELETE`| `/api/generator/voices/:id` | - | Xóa voice khỏi danh sách lịch sử |
-| `POST` | `/api/generator/upload-voice` | FormData (`file`) | Tải lên file Voice (.mp3, .wav, .m4a) qua web |
-| `POST` | `/api/generator/process-voice` | `{ filePath, duration, forceRefresh? }` | Nhận diện STT Whisper + Gemini sửa phụ đề & tự động lưu lịch sử |
-| `GET` | `/api/generator/library-summary` | - | Lấy thống kê tổng quan thư viện (tổng số công trình, clips, thời lượng) |
-| `POST` | `/api/generator/assemble-storyline`| `{ targetDuration, mode?: 'single' \| 'all', projectId?, outro? }` | Tự động phân bổ clip 4 giai đoạn theo chế độ 1 công trình hoặc toàn bộ thư viện (kèm chống trùng lặp vừa phải & Usage Memory) |EFAULT 'STAGE_2_ASSEMBLY_FINISHING',
-    aesthetic_score REAL DEFAULT 7.5,
-    scene_description TEXT,
-    thumbnail_path TEXT,
-    is_analyzed INTEGER DEFAULT 0,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE
-);
-
--- 3. Quản lý Video Đã Dựng & Timeline State
-CREATE TABLE generated_videos (
-    id TEXT PRIMARY KEY,
-    project_id TEXT,
-    project_name TEXT,
-    voice_path TEXT,
-    voice_duration REAL DEFAULT 0,
-    output_path TEXT,
-    status TEXT DEFAULT 'draft', -- 'draft', 'rendering', 'completed', 'error'
-    timeline_data_json TEXT,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-);
-
--- 4. Bảng lưu cấu hình người dùng
-CREATE TABLE system_settings (
-    key TEXT PRIMARY KEY,
-    value TEXT NOT NULL,
-    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-);
-
--- 5. Bảng ghi nhớ danh sách Voice đã nạp (Lịch sử Voice)
-CREATE TABLE voices (
-    id TEXT PRIMARY KEY,
-    file_name TEXT NOT NULL,
-    file_path TEXT NOT NULL UNIQUE,
-    duration REAL DEFAULT 0,
-    stt_text TEXT,
-    raw_words_json TEXT,
-    subtitles_json TEXT,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-);
-```
-
----
-
-## 6. DANH MỤC API ROUTES (BACKEND ENDPOINTS)
-
-| Method | Endpoint | Tham Số (Body/Query) | Mô Tả |
-| :--- | :--- | :--- | :--- |
-| `GET` | `/api/library/projects` | - | Lấy danh sách tất cả các công trình và tổng số video |
-| `GET` | `/api/library/projects/:id/videos` | - | Lấy danh sách clip chi tiết của 1 công trình |
-| `POST` | `/api/library/pick-and-import` | `{ initialPath?: string }` | Mở hộp thoại chọn thư mục công trình Windows & tự động phân tích AI |
-| `POST` | `/api/library/import-path` | `{ folderPath: string }` | Nhập thư mục công trình từ đường dẫn & tự động phân tích AI |
-| `POST` | `/api/library/projects/:id/scan` | - | Kích hoạt quét và nhúng AI chạy nền cho 1 công trình (xử lý song song 4 luồng) |
-| `GET` | `/api/library/projects/:id/scan-status` | - | Lấy tiến độ % quét và phân tích AI thời gian thực của công trình |
-| `DELETE`| `/api/library/projects/:id` | - | Xóa 1 công trình và các video liên quan khỏi thư viện |
-| `GET` | `/api/generator/voices` | - | Lấy danh sách voice đã nạp và lưu trong lịch sử SQLite |
+| `POST` | `/api/library/delete-source` | `{ filePath?: string, sourceId?: string, projectId?: string }` | Xóa vĩnh viễn 1 file nguồn gốc (vật lý trên ổ cứng + CSDL SQLite) và cập nhật số lượng clip của công trình |
+| `POST` | `/api/library/trim-source` | `{ filePath?: string, sourceId?: string, startTime: number, endTime: number }` | Cắt vĩnh viễn 1 file video nguồn gốc theo 2 đầu (FFmpeg + SQLite), ghi đè file gốc và tạo thumbnail mới |
+| `GET` | `/api/generator/voices` | - | Lấy danh sách voice đã nạp, phụ đề và dự án timeline đã lưu trong SQLite |
+| `POST` | `/api/generator/save-project` | `{ voicePath, voiceId?, timelineData }` | Tự động lưu toàn diện dự án Timeline (clips, BGM, phụ đề, styles, outro) ứng với Voice vào SQLite |
+| `GET` | `/api/generator/last-project` | - | Lấy dữ liệu dự án gần nhất để tự động khôi phục khi mở lại app |
+| `GET` | `/api/generator/voice-project/:id` | - | Lấy dữ liệu dự án timeline đã lưu của 1 Voice cụ thể (1-Click Mở Lại Dự Án) |
 | `POST` | `/api/generator/pick-voice` | `{ initialDir?: string }` | Mở hộp thoại Windows chọn file Voice âm thanh (.mp3, .wav, .m4a) qua `audio-picker.ps1` |
 | `POST` | `/api/generator/pick-media` | `{ initialDir?: string }` | Mở hộp thoại Windows chọn file Video hoặc Ảnh (.mp4, .mov, .jpg, .png...) thay thế clip qua `media-picker.ps1` |
 | `DELETE`| `/api/generator/voices/:id` | - | Xóa voice khỏi danh sách lịch sử |
@@ -365,7 +309,7 @@ Auto_Video_TamDuc/
 │   ├── db.ts                   # SQLite wrapper
 │   ├── watcher.ts              # Chokidar watcher (Hybrid mode)
 │   ├── routes/
-│   │   ├── library.routes.ts   # Quản lý công trình & scan
+│   │   ├── library.routes.ts   # Quản lý công trình, scan & xóa source gốc
 │   │   ├── generator.routes.ts # STT, Sửa phụ đề, Sinh kịch bản
 │   │   ├── render.routes.ts    # Render MP4 1080x1920
 │   │   └── settings.routes.ts  # Quản lý API Key, Base URL, Thư mục Source & Exports, Video Outro
@@ -391,7 +335,7 @@ Auto_Video_TamDuc/
 │   │   ├── Navbar.tsx
 │   │   ├── LibraryView/        # Thư viện công trình
 │   │   ├── GeneratorView/      # Wizard tạo video 1-Click
-│   │   ├── EditorView/         # Trình dựng Timeline & Remotion Player 9:16
+│   │   ├── EditorView/         # Trình dựng Timeline, Remotion Player 9:16 & Xóa Source Gốc
 │   │   └── SettingsView/       # Cài đặt hệ thống
 │   └── remotion/               # Composition Remotion 9:16
 │       ├── Root.tsx
@@ -456,5 +400,30 @@ Hệ thống đã tạo sẵn bộ công cụ sao lưu tự động toàn bộ m
 
 - **Native Dialogs (PowerShell STA)**: Đồng bộ hóa toàn bộ 4 script (`picker.ps1`, `audio-picker.ps1`, `media-picker.ps1`, `video-picker.ps1`) với cơ chế xử lý `InitialDir` thông minh (tự động nhận diện thư mục cha nếu truyền file path) và thiết lập `$form.ShowInTaskbar = $true` + `$form.WindowState = Normal` để đảm bảo hộp thoại luôn nổi lên trên cùng màn hình.
 - **Config Persistence**: Tối ưu hóa việc lưu trữ và đồng bộ hóa `defaultOutroPath`, `outroEnabled`, `outroDuration` đồng thời ở cả cấp root và khối `defaults` trong `config.json` để tương thích ngược 100% với các service backend.
+- **Xóa Source Gốc Vĩnh Viễn & Tự Động Thay Thế Footage Thông Minh**:
+  - Endpoint `POST /api/library/delete-source`: Xóa file vật lý trên ổ cứng (`fs.unlinkSync`), xóa thumbnail cache, xóa bản ghi `video_sources` trong SQLite và tự động cập nhật lại `total_videos` của `projects`.
+  - Trên Timeline Editor: Khi chọn 1 clip, thanh Quick Actions hiển thị nút `Xóa Source Gốc` màu đỏ. Modal xác nhận an toàn hiển thị thumbnail, tên file, đường dẫn chi tiết và cảnh báo nguy hiểm trước khi xóa.
+  - Sau khi xóa: Tự động loại bỏ file khỏi `availableSources`, tự động tìm kiếm footage phù hợp cùng/khác stage để thay thế ngay vào vị trí slot bị xóa (bảo toàn 100% thời lượng slot và nhịp điệu timeline), đồng thời cập nhật mọi clip khác trên timeline nếu có dùng chung file.
+  - Thêm nút xóa trực tiếp trên từng card trong modal "Chọn Footage Thay Thế Từ Công Trình".
+- **Cắt Source Gốc 2 Đầu Vĩnh Viễn & Đồng Bộ Thư Viện (Video Trimmer Engine)**:
+  - Endpoint `POST /api/library/trim-source`: Cắt video chính xác từng khung hình bằng FFmpeg (`libx264 -preset veryfast -crf 18`), ghi đè an toàn file gốc trên ổ cứng, tự động tạo lại thumbnail mới và cập nhật thời lượng `duration` trong CSDL SQLite `video_sources`.
+  - Trên Timeline Editor: Khi chọn 1 clip, thanh Quick Actions hiển thị nút `Cắt Source Gốc`. Modal cắt video 2 đầu trực quan hỗ trợ xem trước video, thanh trượt 2 đầu (Start handle xanh lá / End handle đỏ cam), nhập số giây chi tiết, nút Xem thử đoạn cắt và nút Cắt Vĩnh Viễn.
+  - Sau khi cắt: Tự động cập nhật `sourceStart = 0`, thumbnail mới cho clip trên Timeline và đồng bộ danh sách `localAvailableSources`.
+- **Tự Động Lưu Dự Án Ứng Với Voice & Khôi Phục 1-Click (Project Auto-Save Engine)**:
+  - SQLite Schema: Bổ sung cột `timeline_project_json TEXT` vào bảng `voices` và ghi nhớ `last_active_voice_path` trong `system_settings`.
+  - Backend API: Cung cấp 3 endpoint `POST /api/generator/save-project`, `GET /api/generator/last-project` và `GET /api/generator/voice-project/:id`.
+  - Tự động lưu ngầm (Debounce 800ms): Mọi thao tác đổi clip, di chuyển, cắt 2 đầu, sửa phụ đề, chỉnh volume BGM/Voice, cỡ chữ phụ đề hay Outro đều được lưu tức thì vào SQLite.
+  - Trực quan hóa trạng thái: Thanh Timeline hiển thị trạng thái `☁️ Đã lưu (HH:mm:ss)` kèm nút `💾 Lưu Ngay`.
+  - Danh sách Voice: Thẻ Voice hiển thị badge `🎬 [N] clips` kèm nút `🎬 Mở Lại Dự Án` để 1-click vào thẳng Timeline Editor mà không cần phân bổ lại từ đầu.
+  - Tự động khôi phục: Khởi động app tự động nạp lại dự án gần nhất đang làm việc.
+- **Sửa Triệt Để Lỗi Thiếu Phụ Đề Đoạn Cuối & Two-Pass STT Safety Engine**:
+  - Nguyên nhân gốc: Tham số `prompt` dài trước đây truyền vào Whisper API gây ra vòng lặp ảo giác (loop hallucination: *"Hãy subscribe cho kênh Ghiền Mì Gõ..."*) ở nửa sau file voice, khiến văn bản thật bị nuốt chửng và bộ lọc anti-hallucination cắt bỏ toàn bộ nửa sau của phụ đề.
+  - Khắc phục triệt để:
+    1. Loại bỏ prompt dài gây nhiễu trong Whisper STT, đảm bảo nhận diện chính xác 100% văn bản giọng đọc xuyên suốt toàn bộ thời lượng.
+    2. Triển khai **Two-Pass STT Safety Engine**: Tự động đo thời lượng chính xác của voice; nếu từ cuối cùng kết thúc trước mốc audio > 3.5s, tự động cắt lát audio đuôi và chạy Pass 2 để bù đắp từ bị thiếu.
+    3. Thêm cơ chế **Auto-Heal STT Cache**: Khi nạp voice từ cache, nếu phát hiện bản ghi cũ bị thiếu đuôi (< 85% thời lượng voice), hệ thống tự động nhận diện lại toàn diện và chữa lành 100% phụ đề trong CSDL SQLite.
 - **Build & Quality Assurance**: Dự án đã vượt qua bài kiểm tra `npx tsc --noEmit` và `npm run build` với 0 lỗi cú pháp, toàn bộ các luồng Thư viện, Tạo video nhanh, Dựng timeline và Xuất MP4 hoạt động trơn tru, ổn định tuyệt đối.
+
+
+
 

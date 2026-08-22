@@ -173,6 +173,7 @@ generatorRouter.get('/voices', (req, res) => {
         ...v,
         raw_words: rawWords,
         subtitles: subs,
+        timeline_project: v.timeline_project_json ? JSON.parse(v.timeline_project_json) : null,
       };
     });
     res.json({ success: true, data: formatted });
@@ -206,26 +207,27 @@ generatorRouter.post('/process-voice', async (req, res) => {
       if (existing && existing.subtitles_json) {
         const rawWords = existing.raw_words_json ? JSON.parse(existing.raw_words_json) : [];
         let subs = existing.subtitles_json ? JSON.parse(existing.subtitles_json) : [];
-
         const lastSubEnd = subs.length > 0 ? subs[subs.length - 1].end : 0;
-        if (rawWords.length > 0 && (subs.length === 0 || (existing.duration > 5 && lastSubEnd < existing.duration * 0.85))) {
-          subs = segmentAndPolishSubtitles(rawWords);
-          try {
-            db.prepare(`UPDATE voices SET subtitles_json = ? WHERE id = ?`).run(JSON.stringify(subs), existing.id);
-          } catch (_) {}
-        }
+        const lastRawWordEnd = rawWords.length > 0 ? rawWords[rawWords.length - 1].end : 0;
 
-        return res.json({
-          success: true,
-          cached: true,
-          data: {
-            id: existing.id,
-            rawText: existing.stt_text,
-            duration: existing.duration,
-            words: rawWords,
-            subtitles: subs,
-          },
-        });
+        // Nếu bản ghi cũ trong DB bị thiếu phụ đề đoạn cuối (lastSubEnd hoặc lastRawWordEnd < 85% thời lượng voice)
+        // -> Tự động kích hoạt nhận diện lại toàn diện để chữa lành và phục hồi đầy đủ 100% phụ đề!
+        if (existing.duration > 5 && (lastSubEnd < existing.duration * 0.85 || lastRawWordEnd < existing.duration * 0.85 || subs.length === 0)) {
+          console.log(`[Generator] Detected incomplete legacy subtitle tail for ${filePath} (${lastSubEnd.toFixed(1)}s / ${existing.duration.toFixed(1)}s). Triggering auto-heal STT...`);
+          // Không return cache, để chạy tiếp xuống transcribeAudio bên dưới để chữa lành
+        } else {
+          return res.json({
+            success: true,
+            cached: true,
+            data: {
+              id: existing.id,
+              rawText: existing.stt_text,
+              duration: existing.duration,
+              words: rawWords,
+              subtitles: subs,
+            },
+          });
+        }
       }
     }
 
@@ -506,3 +508,106 @@ generatorRouter.get('/bgm-list', (req, res) => {
 
   res.json({ success: true, data: list });
 });
+
+// 8. Tự động lưu dự án Timeline ứng với Voice vào CSDL SQLite
+generatorRouter.post('/save-project', (req, res) => {
+  try {
+    const { voicePath, voiceId, timelineData } = req.body || {};
+    if ((!voicePath && !voiceId) || !timelineData) {
+      return res.status(400).json({ success: false, error: 'Thiếu voicePath/voiceId hoặc timelineData' });
+    }
+
+    const projectJson = JSON.stringify({
+      ...timelineData,
+      updatedAt: new Date().toISOString(),
+    });
+
+    if (voiceId) {
+      db.prepare(`
+        UPDATE voices 
+        SET timeline_project_json = ? 
+        WHERE id = ?
+      `).run(projectJson, voiceId);
+    } else {
+      db.prepare(`
+        UPDATE voices 
+        SET timeline_project_json = ? 
+        WHERE file_path = ?
+      `).run(projectJson, voicePath);
+    }
+
+    // Lưu vào system_settings key last_active_voice_path để khôi phục khi mở lại app
+    const targetVoicePath = voicePath || timelineData.voicePath;
+    if (targetVoicePath) {
+      db.prepare(`
+        INSERT INTO system_settings (key, value, updated_at)
+        VALUES ('last_active_voice_path', ?, CURRENT_TIMESTAMP)
+        ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP
+      `).run(targetVoicePath);
+    }
+
+    res.json({
+      success: true,
+      message: 'Đã tự động lưu dự án thành công',
+      savedAt: new Date().toISOString(),
+    });
+  } catch (err: any) {
+    console.error('[SaveProject] Error:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// 9. Lấy dữ liệu dự án gần nhất để tự động khôi phục khi mở lại app
+generatorRouter.get('/last-project', (req, res) => {
+  try {
+    const setting: any = db.prepare(`SELECT value FROM system_settings WHERE key = 'last_active_voice_path'`).get();
+    if (!setting || !setting.value) {
+      return res.json({ success: false, message: 'Chưa có dự án gần nhất nào' });
+    }
+
+    const voiceRecord: any = db.prepare(`SELECT * FROM voices WHERE file_path = ?`).get(setting.value);
+    if (!voiceRecord || !voiceRecord.timeline_project_json) {
+      return res.json({ success: false, message: 'Không tìm thấy dữ liệu dự án đã lưu' });
+    }
+
+    const projectData = JSON.parse(voiceRecord.timeline_project_json);
+    res.json({
+      success: true,
+      data: projectData,
+      voice: {
+        id: voiceRecord.id,
+        fileName: voiceRecord.file_name,
+        filePath: voiceRecord.file_path,
+        duration: voiceRecord.duration,
+      },
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// 10. Lấy dữ liệu dự án đã lưu của 1 Voice cụ thể (khi bấm 'Mở Lại Dự Án')
+generatorRouter.get('/voice-project/:id', (req, res) => {
+  try {
+    const voiceId = req.params.id;
+    const voiceRecord: any = db.prepare(`SELECT * FROM voices WHERE id = ? OR file_path = ?`).get(voiceId, voiceId);
+    if (!voiceRecord || !voiceRecord.timeline_project_json) {
+      return res.status(404).json({ success: false, error: 'Voice này chưa có dự án timeline được lưu' });
+    }
+
+    const projectData = JSON.parse(voiceRecord.timeline_project_json);
+    res.json({
+      success: true,
+      data: projectData,
+      voice: {
+        id: voiceRecord.id,
+        fileName: voiceRecord.file_name,
+        filePath: voiceRecord.file_path,
+        duration: voiceRecord.duration,
+      },
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+

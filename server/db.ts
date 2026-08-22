@@ -66,7 +66,7 @@ db.exec(`
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
   );
 
-  -- 5. Bảng ghi nhớ danh sách Voice đã nạp (Lịch sử Voice)
+  -- 5. Bảng ghi nhớ danh sách Voice đã nạp (Lịch sử Voice & Timeline Projects)
   CREATE TABLE IF NOT EXISTS voices (
     id TEXT PRIMARY KEY,
     file_name TEXT NOT NULL,
@@ -75,21 +75,29 @@ db.exec(`
     stt_text TEXT,
     raw_words_json TEXT,
     subtitles_json TEXT,
+    timeline_project_json TEXT,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
   );
 `);
 
-// Migration an toàn: Bổ sung các cột mới nếu bảng video_sources đã tồn tại từ trước
+// Migration an toàn: Bổ sung các cột mới nếu bảng đã tồn tại từ trước
 try {
-  const columns = db.prepare(`PRAGMA table_info(video_sources)`).all() as any[];
-  const colNames = columns.map((c) => c.name);
-  if (!colNames.includes('usage_count')) {
+  const videoCols = db.prepare(`PRAGMA table_info(video_sources)`).all() as any[];
+  const videoColNames = videoCols.map((c) => c.name);
+  if (!videoColNames.includes('usage_count')) {
     db.exec(`ALTER TABLE video_sources ADD COLUMN usage_count INTEGER DEFAULT 0;`);
     console.log('[Database] Migrated: added column `usage_count` to video_sources');
   }
-  if (!colNames.includes('last_used_at')) {
+  if (!videoColNames.includes('last_used_at')) {
     db.exec(`ALTER TABLE video_sources ADD COLUMN last_used_at DATETIME;`);
     console.log('[Database] Migrated: added column `last_used_at` to video_sources');
+  }
+
+  const voiceCols = db.prepare(`PRAGMA table_info(voices)`).all() as any[];
+  const voiceColNames = voiceCols.map((c) => c.name);
+  if (!voiceColNames.includes('timeline_project_json')) {
+    db.exec(`ALTER TABLE voices ADD COLUMN timeline_project_json TEXT;`);
+    console.log('[Database] Migrated: added column `timeline_project_json` to voices');
   }
 } catch (migErr: any) {
   console.warn('[Database] Migration warning:', migErr.message);

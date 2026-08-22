@@ -4,6 +4,7 @@ import fs from 'fs';
 import { execFile } from 'child_process';
 import { db } from '../db.js';
 import { folderWatcher } from '../watcher.js';
+import { trimVideoFile } from '../services/ffmpeg.js';
 
 export const libraryRouter = Router();
 
@@ -153,3 +154,144 @@ libraryRouter.delete('/projects/:id', (req, res) => {
     res.status(500).json({ success: false, error: err.message });
   }
 });
+
+// Xóa vĩnh viễn 1 file source gốc (vật lý trên ổ cứng + CSDL SQLite)
+libraryRouter.post('/delete-source', (req, res) => {
+  try {
+    const { filePath, sourceId, projectId } = req.body || {};
+    if (!filePath && !sourceId) {
+      return res.status(400).json({ success: false, error: 'Thiếu filePath hoặc sourceId cần xóa' });
+    }
+
+    // 1. Tìm thông tin file trong database nếu có
+    let sourceRecord: any = null;
+    if (sourceId) {
+      sourceRecord = db.prepare('SELECT * FROM video_sources WHERE id = ?').get(sourceId);
+    } else if (filePath) {
+      sourceRecord = db.prepare('SELECT * FROM video_sources WHERE file_path = ?').get(filePath);
+    }
+
+    const targetFilePath = sourceRecord?.file_path || filePath;
+    const targetProjectId = sourceRecord?.project_id || projectId;
+
+    // 2. Xóa file vật lý trên ổ đĩa nếu tồn tại
+    let fileDeletedFromDisk = false;
+    if (targetFilePath && fs.existsSync(targetFilePath)) {
+      try {
+        fs.unlinkSync(targetFilePath);
+        fileDeletedFromDisk = true;
+        console.log(`[DeleteSource] Successfully deleted physical file: ${targetFilePath}`);
+      } catch (fsErr: any) {
+        console.error(`[DeleteSource] Failed to delete physical file ${targetFilePath}:`, fsErr);
+      }
+    }
+
+    // 3. Xóa thumbnail cache nếu có
+    if (sourceRecord?.thumbnail_path) {
+      try {
+        const thumbFull = path.resolve(process.cwd(), sourceRecord.thumbnail_path);
+        if (fs.existsSync(thumbFull)) {
+          fs.unlinkSync(thumbFull);
+        }
+      } catch (thumbErr) {
+        // ignore cache delete error
+      }
+    }
+
+    // 4. Xóa bản ghi trong SQLite
+    if (sourceRecord?.id) {
+      db.prepare('DELETE FROM video_sources WHERE id = ?').run(sourceRecord.id);
+    } else if (targetFilePath) {
+      db.prepare('DELETE FROM video_sources WHERE file_path = ?').run(targetFilePath);
+    }
+
+    // 5. Cập nhật lại total_videos trong bảng projects nếu có projectId
+    if (targetProjectId) {
+      db.prepare(`
+        UPDATE projects 
+        SET total_videos = (SELECT COUNT(*) FROM video_sources WHERE project_id = ?) 
+        WHERE id = ?
+      `).run(targetProjectId, targetProjectId);
+    }
+
+    res.json({
+      success: true,
+      fileDeletedFromDisk,
+      message: `Đã xóa vĩnh viễn file nguồn ${path.basename(targetFilePath || '')} thành công`,
+      deletedFilePath: targetFilePath,
+      deletedSourceId: sourceRecord?.id || sourceId,
+    });
+  } catch (err: any) {
+    console.error('[DeleteSource] Error:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Cắt vĩnh viễn 1 file source video gốc (vật lý trên ổ cứng + CSDL SQLite)
+libraryRouter.post('/trim-source', async (req, res) => {
+  try {
+    const { filePath, sourceId, startTime, endTime } = req.body || {};
+    if (!filePath && !sourceId) {
+      return res.status(400).json({ success: false, error: 'Thiếu filePath hoặc sourceId cần cắt' });
+    }
+
+    const start = Math.max(0, Number(startTime) || 0);
+    const end = Number(endTime);
+    if (isNaN(end) || end <= start) {
+      return res.status(400).json({ success: false, error: 'Khoảng thời gian cắt không hợp lệ (endTime phải lớn hơn startTime)' });
+    }
+
+    // 1. Tìm thông tin file trong CSDL
+    let sourceRecord: any = null;
+    if (sourceId) {
+      sourceRecord = db.prepare('SELECT * FROM video_sources WHERE id = ?').get(sourceId);
+    } else if (filePath) {
+      sourceRecord = db.prepare('SELECT * FROM video_sources WHERE file_path = ?').get(filePath);
+    }
+
+    const targetFilePath = sourceRecord?.file_path || filePath;
+    if (!targetFilePath || !fs.existsSync(targetFilePath)) {
+      return res.status(404).json({ success: false, error: 'File video không tồn tại trên ổ cứng' });
+    }
+
+    const videoId = sourceRecord?.id || path.basename(targetFilePath, path.extname(targetFilePath));
+
+    // 2. Thực hiện cắt video bằng FFmpeg và trích xuất thumbnail mới
+    const { duration: newDuration, thumbnailPath: newThumbPath } = await trimVideoFile(
+      targetFilePath,
+      start,
+      end,
+      videoId
+    );
+
+    // 3. Cập nhật bản ghi trong SQLite
+    if (sourceRecord?.id) {
+      db.prepare('UPDATE video_sources SET duration = ?, thumbnail_path = ? WHERE id = ?').run(
+        newDuration,
+        newThumbPath,
+        sourceRecord.id
+      );
+    } else {
+      db.prepare('UPDATE video_sources SET duration = ?, thumbnail_path = ? WHERE file_path = ?').run(
+        newDuration,
+        newThumbPath,
+        targetFilePath
+      );
+    }
+
+    res.json({
+      success: true,
+      message: `Đã cắt vĩnh viễn video ${path.basename(targetFilePath)} thành công`,
+      newDuration,
+      newThumbnailPath: newThumbPath,
+      fileName: path.basename(targetFilePath),
+      filePath: targetFilePath,
+      sourceId: sourceRecord?.id || sourceId,
+    });
+  } catch (err: any) {
+    console.error('[TrimSource] Error:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+

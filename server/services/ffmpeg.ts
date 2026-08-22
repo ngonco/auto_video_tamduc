@@ -149,3 +149,62 @@ export async function extractKeyframes(
   return { framePaths, thumbnailPath };
 }
 
+/**
+ * Cắt video từ startTime đến endTime bằng FFmpeg, ghi đè an toàn file gốc và tạo thumbnail mới
+ */
+export async function trimVideoFile(
+  filePath: string,
+  startTime: number,
+  endTime: number,
+  videoId: string
+): Promise<{ duration: number; thumbnailPath: string }> {
+  const duration = Math.max(0.1, endTime - startTime);
+  const ext = path.extname(filePath);
+  const tempOutPath = path.join(CACHE_DIR, `temp_trim_${Date.now()}_${videoId}${ext}`);
+
+  // Thực hiện cắt video chính xác từng khung hình với FFmpeg
+  await new Promise<void>((resolve, reject) => {
+    ffmpeg(filePath)
+      .setStartTime(startTime)
+      .setDuration(duration)
+      .outputOptions([
+        '-c:v', 'libx264',
+        '-preset', 'veryfast',
+        '-crf', '18',
+        '-c:a', 'aac',
+        '-b:a', '192k',
+        '-movflags', '+faststart',
+      ])
+      .output(tempOutPath)
+      .on('end', () => resolve())
+      .on('error', (err) => reject(err))
+      .run();
+  });
+
+  if (!fs.existsSync(tempOutPath)) {
+    throw new Error('Không thể tạo file video sau khi cắt');
+  }
+
+  // Ghi đè file gốc an toàn
+  try {
+    fs.copyFileSync(tempOutPath, filePath);
+    fs.unlinkSync(tempOutPath);
+  } catch (fsErr) {
+    try {
+      fs.unlinkSync(filePath);
+      fs.renameSync(tempOutPath, filePath);
+    } catch (renameErr) {
+      throw new Error(`Lỗi ghi đè file gốc: ${(fsErr as any).message}`);
+    }
+  }
+
+  // Trích xuất lại thumbnail mới cho video đã cắt
+  const { thumbnailPath } = await extractKeyframes(filePath, videoId, duration);
+
+  return {
+    duration,
+    thumbnailPath,
+  };
+}
+
+

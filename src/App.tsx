@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Navbar } from './components/Navbar.js';
 import { LibraryGrid } from './components/LibraryView/LibraryGrid.js';
 import { GeneratorWizard } from './components/GeneratorView/GeneratorWizard.js';
@@ -21,6 +21,15 @@ interface ActiveTimelineState {
     duration: number;
     enabled: boolean;
   } | null;
+  bgm?: {
+    selectedBgm: string;
+    bgmVolume: number;
+    voiceVolume: number;
+  };
+  subtitleStyles?: {
+    fontSize: number;
+    bottomPercent: number;
+  };
 }
 
 export const App: React.FC = () => {
@@ -29,6 +38,19 @@ export const App: React.FC = () => {
 
   // Timeline state hiện tại
   const [timelineData, setTimelineData] = useState<ActiveTimelineState | null>(null);
+
+  // Tự động khôi phục dự án gần nhất khi khởi động ứng dụng
+  useEffect(() => {
+    fetch('/api/generator/last-project')
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.success && data.data && data.data.clips && data.data.clips.length > 0) {
+          setTimelineData(data.data);
+          console.log('[App] Restored last active project:', data.data.projectName || data.voice?.fileName);
+        }
+      })
+      .catch((err) => console.warn('[App] Error restoring last project:', err));
+  }, []);
 
   // Chọn project từ Library để chuyển sang Generator
   const handleSelectProjectForGeneration = (projectId: string, folderName: string) => {

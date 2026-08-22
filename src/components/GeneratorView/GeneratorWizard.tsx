@@ -47,6 +47,7 @@ interface SavedVoiceItem {
   stt_text: string;
   raw_words: any[];
   subtitles: SubtitleLine[];
+  timeline_project?: any;
   created_at: string;
 }
 
@@ -379,6 +380,24 @@ export const GeneratorWizard: React.FC<GeneratorWizardProps> = ({
     setErrorMsg('');
   };
 
+  // 4b. Mở lại Dự Án Timeline đã lưu ứng với Voice (1-Click vào thẳng Editor)
+  const handleOpenSavedProject = (saved: SavedVoiceItem, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    if (!saved.timeline_project || !saved.timeline_project.clips || saved.timeline_project.clips.length === 0) {
+      handleSelectSavedVoice(saved);
+      return;
+    }
+
+    const voiceUrl = `/media/stream?path=${encodeURIComponent(saved.file_path)}`;
+    onStorylineGenerated({
+      ...saved.timeline_project,
+      voicePath: saved.file_path,
+      voiceUrl,
+      duration: saved.duration,
+      subtitles: saved.timeline_project.subtitles || saved.subtitles || [],
+    });
+  };
+
   // 5. Xóa Voice khỏi Lịch sử
   const handleDeleteSavedVoice = async (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
@@ -431,7 +450,7 @@ export const GeneratorWizard: React.FC<GeneratorWizardProps> = ({
         }
         const voiceUrl = `/media/stream?path=${encodeURIComponent(voicePath)}`;
 
-        onStorylineGenerated({
+        const newProjectData = {
           projectId: sourceMode === 'single' ? selectedProjectId : 'ALL_PROJECTS',
           projectName: projName,
           voicePath,
@@ -441,7 +460,21 @@ export const GeneratorWizard: React.FC<GeneratorWizardProps> = ({
           clips: data.data.clips,
           availableSources: data.data.availableSources || [],
           outro: data.data.outro || null,
-        });
+        };
+
+        // Tự động lưu dự án ban đầu vào CSDL SQLite
+        try {
+          fetch('/api/generator/save-project', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              voicePath,
+              timelineData: newProjectData,
+            }),
+          });
+        } catch (_) {}
+
+        onStorylineGenerated(newProjectData);
       } else {
         setErrorMsg(data.error || 'Lỗi lắp ráp kịch bản video');
       }
@@ -542,44 +575,74 @@ export const GeneratorWizard: React.FC<GeneratorWizardProps> = ({
                 <History className="w-3.5 h-3.5 text-amber-400" />
                 Danh Sách Voice Đã Nạp Gần Đây (Bấm để dùng ngay):
               </p>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 max-h-48 overflow-y-auto pr-1">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 max-h-56 overflow-y-auto pr-1">
                 {savedVoices.map((v) => {
                   const isCurrent = voicePath === v.file_path;
+                  const hasProject = Boolean(v.timeline_project && v.timeline_project.clips && v.timeline_project.clips.length > 0);
+                  const clipCount = hasProject ? v.timeline_project.clips.length : 0;
+
                   return (
                     <div
                       key={v.id}
                       onClick={() => handleSelectSavedVoice(v)}
-                      className={`p-3 rounded-xl border text-xs cursor-pointer transition flex items-center justify-between ${
+                      className={`p-3 rounded-xl border text-xs cursor-pointer transition flex flex-col justify-between gap-2 ${
                         isCurrent
                           ? 'bg-amber-500/20 border-amber-500 text-amber-200 shadow-md shadow-amber-500/10'
                           : 'bg-slate-900/80 border-slate-800 hover:border-slate-700 text-slate-300'
                       }`}
                     >
-                      <div className="flex items-center gap-2.5 truncate">
-                        <div className={`w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 ${
-                          isCurrent ? 'bg-amber-500 text-slate-950 font-bold' : 'bg-slate-800 text-slate-400'
-                        }`}>
-                          <Music className="w-4 h-4" />
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="flex items-center gap-2.5 truncate">
+                          <div className={`w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 ${
+                            isCurrent ? 'bg-amber-500 text-slate-950 font-bold' : 'bg-slate-800 text-slate-400'
+                          }`}>
+                            <Music className="w-4 h-4" />
+                          </div>
+                          <div className="truncate">
+                            <p className="font-bold truncate text-[11px] text-slate-100">{v.file_name}</p>
+                            <p className="text-[10px] text-slate-400 flex items-center gap-2 mt-0.5">
+                              <span className="font-mono text-amber-400/90">{v.duration.toFixed(1)}s</span>
+                              <span>•</span>
+                              <span>{v.subtitles?.length || 0} dòng sub</span>
+                            </p>
+                          </div>
                         </div>
-                        <div className="truncate">
-                          <p className="font-bold truncate text-[11px]">{v.file_name}</p>
-                          <p className="text-[10px] text-slate-400 flex items-center gap-2 mt-0.5">
-                            <span className="font-mono text-amber-400/90">{v.duration.toFixed(1)}s</span>
-                            <span>•</span>
-                            <span>{v.subtitles?.length || 0} dòng</span>
-                          </p>
+
+                        <div className="flex items-center gap-1 flex-shrink-0">
+                          {isCurrent && <CheckCircle2 className="w-4 h-4 text-amber-400" />}
+                          <button
+                            onClick={(e) => handleDeleteSavedVoice(v.id, e)}
+                            className="p-1 text-slate-500 hover:text-red-400 transition cursor-pointer"
+                            title="Xóa voice này khỏi lịch sử"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
                         </div>
                       </div>
 
-                      <div className="flex items-center gap-1.5 ml-2 flex-shrink-0">
-                        {isCurrent && <CheckCircle2 className="w-4 h-4 text-amber-400" />}
-                        <button
-                          onClick={(e) => handleDeleteSavedVoice(v.id, e)}
-                          className="p-1 text-slate-500 hover:text-red-400 transition"
-                          title="Xóa voice này khỏi lịch sử"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
+                      {/* Footer thẻ: Badge dự án & Nút Mở Lại Dự Án */}
+                      <div className="flex items-center justify-between pt-1 border-t border-slate-800/80 mt-1">
+                        {hasProject ? (
+                          <div className="flex items-center justify-between w-full gap-2">
+                            <span className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 flex items-center gap-1 font-bold">
+                              <Film className="w-2.5 h-2.5 text-emerald-400" />
+                              <span>{clipCount} clips</span>
+                            </span>
+
+                            <button
+                              onClick={(e) => handleOpenSavedProject(v, e)}
+                              className="px-2.5 py-1 bg-emerald-500/25 hover:bg-emerald-500/40 text-emerald-300 hover:text-emerald-100 rounded-lg text-[10px] font-bold border border-emerald-500/40 flex items-center gap-1 transition shadow-sm cursor-pointer"
+                              title="Mở thẳng kịch bản Timeline đã lưu trước đó"
+                            >
+                              <span>🎬 Mở Lại Dự Án</span>
+                              <ArrowRight className="w-3 h-3 text-emerald-400" />
+                            </button>
+                          </div>
+                        ) : (
+                          <span className="text-[9px] text-slate-500 italic">
+                            Chưa tạo kịch bản timeline
+                          </span>
+                        )}
                       </div>
                     </div>
                   );

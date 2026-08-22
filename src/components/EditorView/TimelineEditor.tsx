@@ -21,6 +21,8 @@ import {
   Eye,
   Search,
   Check,
+  Save,
+  Cloud,
 } from 'lucide-react';
 import {
   DndContext,
@@ -59,6 +61,15 @@ interface TimelineEditorProps {
       duration: number;
       enabled: boolean;
     } | null;
+    bgm?: {
+      selectedBgm: string;
+      bgmVolume: number;
+      voiceVolume: number;
+    };
+    subtitleStyles?: {
+      fontSize: number;
+      bottomPercent: number;
+    };
   };
   onUpdateClips: (clips: TimelineClipItem[]) => void;
   onUpdateSubtitles: (subtitles: SubtitleLine[]) => void;
@@ -293,22 +304,24 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
   // Player playback state
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
 
-  // Audio settings
-  const [voiceVolume, setVoiceVolume] = useState<number>(1.0);
-  const [bgmVolume, setBgmVolume] = useState<number>(0.15);
-  const [selectedBgm, setSelectedBgm] = useState<string>('');
+  // Audio settings (khôi phục từ timelineData nếu có)
+  const [voiceVolume, setVoiceVolume] = useState<number>(timelineData.bgm?.voiceVolume ?? 1.0);
+  const [bgmVolume, setBgmVolume] = useState<number>(timelineData.bgm?.bgmVolume ?? 0.15);
+  const [selectedBgm, setSelectedBgm] = useState<string>(timelineData.bgm?.selectedBgm ?? '');
   const [bgmList, setBgmList] = useState<{ name: string; fileName: string; filePath: string }[]>([]);
 
   // Subtitle editing state
   const [editingSubId, setEditingSubId] = useState<string | null>(null);
   const [editingSubText, setEditingSubText] = useState<string>('');
 
-  // Subtitle custom size & position state (with persistence)
+  // Subtitle custom size & position state (khôi phục từ timelineData nếu có)
   const [subtitleFontSize, setSubtitleFontSize] = useState<number>(() => {
+    if (timelineData.subtitleStyles?.fontSize) return timelineData.subtitleStyles.fontSize;
     const saved = localStorage.getItem('auto_video_subtitle_fontsize');
     return saved ? Number(saved) : 65;
   });
   const [subtitleBottomPercent, setSubtitleBottomPercent] = useState<number>(() => {
+    if (timelineData.subtitleStyles?.bottomPercent) return timelineData.subtitleStyles.bottomPercent;
     const saved = localStorage.getItem('auto_video_subtitle_bottom_percent');
     return saved ? Number(saved) : 22;
   });
@@ -347,6 +360,196 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
   const [replacingClipId, setReplacingClipId] = useState<string | null>(null);
   const [projectSourceSearch, setProjectSourceSearch] = useState<string>('');
   const [projectSourceStageFilter, setProjectSourceStageFilter] = useState<string>('ALL');
+
+  // Local available sources state (đồng bộ với availableSources từ timelineData)
+  const [localAvailableSources, setLocalAvailableSources] = useState<SourceClipRecord[]>(
+    timelineData.availableSources || []
+  );
+
+  useEffect(() => {
+    if (timelineData.availableSources) {
+      setLocalAvailableSources(timelineData.availableSources);
+    }
+  }, [timelineData.availableSources]);
+
+  // Delete Source Confirmation Modal state
+  const [deleteSourceModal, setDeleteSourceModal] = useState<{
+    isOpen: boolean;
+    filePath: string;
+    fileName: string;
+    thumbnailPath?: string;
+    stage?: string;
+    sourceId?: string;
+    clipId?: string;
+    isDeleting: boolean;
+  }>({
+    isOpen: false,
+    filePath: '',
+    fileName: '',
+    isDeleting: false,
+  });
+
+  // Trim Source Video Modal state
+  const [trimModal, setTrimModal] = useState<{
+    isOpen: boolean;
+    clipId?: string;
+    sourceId?: string;
+    filePath: string;
+    fileName: string;
+    totalDuration: number;
+    startTime: number;
+    endTime: number;
+    currentTime: number;
+    isPlaying: boolean;
+    isTrimming: boolean;
+  }>({
+    isOpen: false,
+    filePath: '',
+    fileName: '',
+    totalDuration: 5.0,
+    startTime: 0,
+    endTime: 5.0,
+    currentTime: 0,
+    isPlaying: false,
+    isTrimming: false,
+  });
+
+  const trimmerVideoRef = useRef<HTMLVideoElement>(null);
+
+
+  // Notification Toast state
+  const [notificationToast, setNotificationToast] = useState<{
+    show: boolean;
+    message: string;
+    type: 'success' | 'error' | 'info';
+  }>({ show: false, message: '', type: 'info' });
+
+  const showToast = useCallback((message: string, type: 'success' | 'error' | 'info' = 'success') => {
+    setNotificationToast({ show: true, message, type });
+    setTimeout(() => {
+      setNotificationToast((prev) => ({ ...prev, show: false }));
+    }, 4000);
+  }, []);
+
+  // ── Auto-save Project state & logic ──
+  const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  const [lastSavedTime, setLastSavedTime] = useState<string>('');
+  const autoSaveTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const isFirstMountRef = useRef(true);
+
+  // Hàm thực thi lưu toàn bộ dự án vào CSDL SQLite
+  const executeSaveProject = useCallback(async (isManual = false) => {
+    if (!timelineData.voicePath) return;
+    setSaveStatus('saving');
+    try {
+      const fullProjectPayload = {
+        projectId: timelineData.projectId,
+        projectName: timelineData.projectName,
+        voicePath: timelineData.voicePath,
+        voiceUrl: timelineData.voiceUrl,
+        duration: timelineData.duration,
+        subtitles: timelineData.subtitles,
+        clips: timelineData.clips,
+        availableSources: localAvailableSources,
+        outro: {
+          filePath: outroPath,
+          fileName: outroFileName,
+          duration: outroDuration,
+          enabled: outroEnabled,
+        },
+        bgm: {
+          selectedBgm,
+          bgmVolume,
+          voiceVolume,
+        },
+        subtitleStyles: {
+          fontSize: subtitleFontSize,
+          bottomPercent: subtitleBottomPercent,
+        },
+      };
+
+      const res = await fetch('/api/generator/save-project', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          voicePath: timelineData.voicePath,
+          timelineData: fullProjectPayload,
+        }),
+      });
+
+      const data = await res.json();
+      if (data.success) {
+        setSaveStatus('saved');
+        const now = new Date();
+        const timeStr = now.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        setLastSavedTime(timeStr);
+        if (isManual) {
+          showToast(`Đã lưu toàn bộ dự án thành công lúc ${timeStr}`, 'success');
+        }
+      } else {
+        setSaveStatus('error');
+      }
+    } catch (err) {
+      console.error('[AutoSave] Error:', err);
+      setSaveStatus('error');
+    }
+  }, [
+    timelineData.projectId,
+    timelineData.projectName,
+    timelineData.voicePath,
+    timelineData.voiceUrl,
+    timelineData.duration,
+    timelineData.subtitles,
+    timelineData.clips,
+    localAvailableSources,
+    outroPath,
+    outroFileName,
+    outroDuration,
+    outroEnabled,
+    selectedBgm,
+    bgmVolume,
+    voiceVolume,
+    subtitleFontSize,
+    subtitleBottomPercent,
+    showToast,
+  ]);
+
+  // Hook tự động lưu ngầm Debounce 800ms khi có bất kỳ thay đổi nào
+  useEffect(() => {
+    if (isFirstMountRef.current) {
+      isFirstMountRef.current = false;
+      return;
+    }
+
+    if (autoSaveTimerRef.current) {
+      clearTimeout(autoSaveTimerRef.current);
+    }
+
+    autoSaveTimerRef.current = setTimeout(() => {
+      executeSaveProject(false);
+    }, 800);
+
+    return () => {
+      if (autoSaveTimerRef.current) {
+        clearTimeout(autoSaveTimerRef.current);
+      }
+    };
+  }, [
+    timelineData.clips,
+    timelineData.subtitles,
+    localAvailableSources,
+    selectedBgm,
+    bgmVolume,
+    voiceVolume,
+    subtitleFontSize,
+    subtitleBottomPercent,
+    outroEnabled,
+    outroPath,
+    outroDuration,
+    executeSaveProject,
+  ]);
+
+
 
   // Render job states
   const [rendering, setRendering] = useState(false);
@@ -525,7 +728,9 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
       }
 
       let workingClips = [...clips];
-      const pool = (timelineData.availableSources && timelineData.availableSources.length > 0)
+      const pool = (localAvailableSources && localAvailableSources.length > 0)
+        ? localAvailableSources
+        : (timelineData.availableSources && timelineData.availableSources.length > 0)
         ? timelineData.availableSources
         : clips.map((c) => ({
             id: c.sourceId || c.id,
@@ -596,7 +801,7 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
         return newClip;
       });
     },
-    [voiceDuration, timelineData.availableSources]
+    [voiceDuration, localAvailableSources, timelineData.availableSources]
   );
 
   // ── Helper: recalculate sequential timeline positions after simple drag/move ──
@@ -723,6 +928,276 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
     },
     [replacingClipId, timelineData.clips, onUpdateClips]
   );
+
+  // ── Mở modal xác nhận xóa source gốc từ Clip đang chọn trên Timeline ──
+  const handleRequestDeleteSelectedClipSource = useCallback(() => {
+    if (!selectedClipId) return;
+    const clip = timelineData.clips.find((c) => c.id === selectedClipId);
+    if (!clip) return;
+    setDeleteSourceModal({
+      isOpen: true,
+      filePath: clip.filePath,
+      fileName: clip.fileName,
+      thumbnailPath: clip.thumbnailPath,
+      stage: clip.stage,
+      sourceId: clip.sourceId,
+      clipId: clip.id,
+      isDeleting: false,
+    });
+  }, [selectedClipId, timelineData.clips]);
+
+  // ── Mở modal xác nhận xóa source gốc từ Modal chọn Source công trình ──
+  const handleRequestDeleteSourceFromModal = useCallback((source: SourceClipRecord) => {
+    setDeleteSourceModal({
+      isOpen: true,
+      filePath: source.filePath,
+      fileName: source.fileName,
+      thumbnailPath: source.thumbnailPath,
+      stage: source.stage,
+      sourceId: source.id,
+      isDeleting: false,
+    });
+  }, []);
+
+  // ── Thực thi xóa vĩnh viễn trên backend & Tự động thay thế footage trên Timeline ──
+  const handleExecuteDeleteSource = useCallback(async () => {
+    const { filePath, sourceId } = deleteSourceModal;
+    if (!filePath && !sourceId) return;
+
+    setDeleteSourceModal((prev) => ({ ...prev, isDeleting: true }));
+
+    try {
+      const res = await fetch('/api/library/delete-source', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          filePath,
+          sourceId,
+          projectId: timelineData.projectId,
+        }),
+      });
+
+      const data = await res.json();
+      if (!data.success) {
+        throw new Error(data.error || 'Lỗi khi xóa file');
+      }
+
+      // 1. Cập nhật danh sách localAvailableSources loại bỏ file bị xóa
+      const updatedPool = localAvailableSources.filter(
+        (s) => s.filePath !== filePath && s.id !== sourceId
+      );
+      setLocalAvailableSources(updatedPool);
+
+      // 2. Thay thế toàn bộ các clip trên timeline đang dùng file bị xóa
+      const fallbackPool =
+        updatedPool.length > 0
+          ? updatedPool
+          : timelineData.clips.filter((c) => c.filePath !== filePath && c.sourceId !== sourceId);
+
+      let replacedCount = 0;
+      const newClips = timelineData.clips.map((c, idx) => {
+        if (c.filePath === filePath || (sourceId && c.sourceId === sourceId)) {
+          replacedCount++;
+          // Tìm clip cùng stage trong pool nếu có, nếu không lấy clip bất kỳ khác
+          const sameStage = fallbackPool.filter((s) => (s.stage || '') === (c.stage || ''));
+          const candidateList = sameStage.length > 0 ? sameStage : fallbackPool;
+          const substitute = candidateList.length > 0 ? candidateList[idx % candidateList.length] : null;
+
+          if (substitute) {
+            return {
+              ...c,
+              sourceId: substitute.id,
+              fileName: substitute.fileName,
+              filePath: substitute.filePath,
+              thumbnailPath: substitute.thumbnailPath || c.thumbnailPath,
+              mediaType: substitute.mediaType || (isImageFile(substitute.filePath) ? 'image' : 'video'),
+              aspectRatioType: substitute.aspectRatioType || '9:16',
+              stage: substitute.stage || c.stage,
+              // Giữ nguyên timelineStart, timelineEnd, sourceDuration!
+            };
+          }
+        }
+        return c;
+      });
+
+      onUpdateClips(newClips);
+      setDeleteSourceModal({ isOpen: false, filePath: '', fileName: '', isDeleting: false });
+      showToast(
+        `Đã xóa vĩnh viễn "${deleteSourceModal.fileName}" và tự động thay thế footage trên Timeline!`,
+        'success'
+      );
+    } catch (err: any) {
+      console.error('[DeleteSource] Error deleting source:', err);
+      showToast(`Lỗi xóa file: ${err.message}`, 'error');
+      setDeleteSourceModal((prev) => ({ ...prev, isDeleting: false }));
+    }
+  }, [
+    deleteSourceModal,
+    timelineData.projectId,
+    timelineData.clips,
+    localAvailableSources,
+    onUpdateClips,
+    showToast,
+  ]);
+
+  // ── Mở modal cắt video nguồn gốc 2 đầu từ Clip đang chọn trên Timeline ──
+  const handleOpenTrimSourceModal = useCallback(() => {
+    if (!selectedClipId) return;
+    const clip = timelineData.clips.find((c) => c.id === selectedClipId);
+    if (!clip) return;
+    if (clip.mediaType === 'image' || isImageFile(clip.filePath)) {
+      showToast('File ảnh tĩnh không thể cắt theo thời gian.', 'info');
+      return;
+    }
+
+    // Lấy full duration từ pool hoặc clip
+    const srcInPool = localAvailableSources.find(
+      (s) => s.id === clip.sourceId || s.filePath === clip.filePath
+    );
+    const fullDuration = srcInPool?.duration || clip.sourceDuration || 10.0;
+    const initStart = Math.min(clip.sourceStart || 0, Math.max(0, fullDuration - 1.0));
+    const initEnd = Math.min(fullDuration, initStart + (clip.sourceDuration || 5.0));
+
+    setTrimModal({
+      isOpen: true,
+      clipId: clip.id,
+      sourceId: clip.sourceId,
+      filePath: clip.filePath,
+      fileName: clip.fileName,
+      totalDuration: fullDuration,
+      startTime: Number(initStart.toFixed(1)),
+      endTime: Number(initEnd.toFixed(1)),
+      currentTime: Number(initStart.toFixed(1)),
+      isPlaying: false,
+      isTrimming: false,
+    });
+  }, [selectedClipId, timelineData.clips, localAvailableSources, showToast]);
+
+  // ── Xem thử / Dừng đoạn cắt video ──
+  const handleToggleTrimPreview = useCallback(() => {
+    if (!trimmerVideoRef.current) return;
+    if (trimModal.isPlaying) {
+      trimmerVideoRef.current.pause();
+      setTrimModal((prev) => ({ ...prev, isPlaying: false }));
+    } else {
+      if (
+        trimmerVideoRef.current.currentTime < trimModal.startTime ||
+        trimmerVideoRef.current.currentTime >= trimModal.endTime - 0.1
+      ) {
+        trimmerVideoRef.current.currentTime = trimModal.startTime;
+      }
+      trimmerVideoRef.current.play();
+      setTrimModal((prev) => ({ ...prev, isPlaying: true }));
+    }
+  }, [trimModal.isPlaying, trimModal.startTime, trimModal.endTime]);
+
+  // ── Đồng bộ thời gian khi video xem thử đang phát ──
+  const handleTrimTimeUpdate = useCallback(() => {
+    if (!trimmerVideoRef.current) return;
+    const curr = trimmerVideoRef.current.currentTime;
+    setTrimModal((prev) => ({ ...prev, currentTime: curr }));
+    if (curr >= trimModal.endTime) {
+      trimmerVideoRef.current.pause();
+      trimmerVideoRef.current.currentTime = trimModal.startTime;
+      setTrimModal((prev) => ({ ...prev, isPlaying: false, currentTime: prev.startTime }));
+    }
+  }, [trimModal.endTime, trimModal.startTime]);
+
+  // ── Điều chỉnh mốc bắt đầu (In Point) ──
+  const handleStartTimeChange = useCallback((val: number) => {
+    const newStart = Math.max(0, Math.min(val, trimModal.endTime - 0.5));
+    setTrimModal((prev) => ({
+      ...prev,
+      startTime: Number(newStart.toFixed(1)),
+      currentTime: Number(newStart.toFixed(1)),
+    }));
+    if (trimmerVideoRef.current) {
+      trimmerVideoRef.current.currentTime = newStart;
+    }
+  }, [trimModal.endTime]);
+
+  // ── Điều chỉnh mốc kết thúc (Out Point) ──
+  const handleEndTimeChange = useCallback((val: number) => {
+    const newEnd = Math.min(trimModal.totalDuration, Math.max(val, trimModal.startTime + 0.5));
+    setTrimModal((prev) => ({
+      ...prev,
+      endTime: Number(newEnd.toFixed(1)),
+    }));
+  }, [trimModal.totalDuration, trimModal.startTime]);
+
+  // ── Thực thi cắt video vĩnh viễn trên backend ──
+  const handleExecuteTrimSource = useCallback(async () => {
+    const { filePath, sourceId, startTime, endTime } = trimModal;
+    if (!filePath) return;
+
+    setTrimModal((prev) => ({ ...prev, isTrimming: true }));
+
+    try {
+      const res = await fetch('/api/library/trim-source', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          filePath,
+          sourceId,
+          startTime,
+          endTime,
+        }),
+      });
+
+      const data = await res.json();
+      if (!data.success) {
+        throw new Error(data.error || 'Lỗi khi cắt video');
+      }
+
+      const newDur = data.newDuration;
+      const newThumb = data.newThumbnailPath;
+
+      // 1. Cập nhật localAvailableSources
+      setLocalAvailableSources((prev) =>
+        prev.map((s) => {
+          if (s.filePath === filePath || (sourceId && s.id === sourceId)) {
+            return {
+              ...s,
+              duration: newDur,
+              thumbnailPath: newThumb || s.thumbnailPath,
+            };
+          }
+          return s;
+        })
+      );
+
+      // 2. Cập nhật các clip trên timeline có dùng file này
+      const newClips = timelineData.clips.map((c) => {
+        if (c.filePath === filePath || (sourceId && c.sourceId === sourceId)) {
+          return {
+            ...c,
+            sourceStart: 0,
+            thumbnailPath: newThumb || c.thumbnailPath,
+            // Giữ nguyên vị trí và độ dài slot trên timeline
+          };
+        }
+        return c;
+      });
+
+      onUpdateClips(newClips);
+      setTrimModal((prev) => ({ ...prev, isOpen: false, isTrimming: false }));
+      showToast(
+        `Đã cắt vĩnh viễn video "${trimModal.fileName}" (${startTime.toFixed(1)}s ➔ ${endTime.toFixed(1)}s, độ dài mới: ${newDur.toFixed(1)}s)!`,
+        'success'
+      );
+    } catch (err: any) {
+      console.error('[TrimSource] Error:', err);
+      showToast(`Lỗi cắt video: ${err.message}`, 'error');
+      setTrimModal((prev) => ({ ...prev, isTrimming: false }));
+    }
+  }, [
+    trimModal,
+    timelineData.clips,
+    onUpdateClips,
+    showToast,
+  ]);
+
+
 
   // ── DnD reorder ──
   const handleDragStart = useCallback((event: DragStartEvent) => {
@@ -1389,6 +1864,22 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
                     <span>Đổi từ Công Trình</span>
                   </button>
                   <button
+                    onClick={handleOpenTrimSourceModal}
+                    className="flex items-center gap-1 px-2 py-0.5 bg-emerald-500/20 hover:bg-emerald-500/35 text-emerald-300 hover:text-emerald-200 text-[10px] font-bold rounded border border-emerald-500/40 transition cursor-pointer font-sans"
+                    title="Cắt ngắn video nguồn gốc bằng cách điều chỉnh 2 đầu (Start/End handle)"
+                  >
+                    <Scissors className="w-3 h-3 text-emerald-400" />
+                    <span>Cắt Source Gốc</span>
+                  </button>
+                  <button
+                    onClick={handleRequestDeleteSelectedClipSource}
+                    className="flex items-center gap-1 px-2 py-0.5 bg-red-500/20 hover:bg-red-500/35 text-red-300 hover:text-red-200 text-[10px] font-bold rounded border border-red-500/40 transition cursor-pointer font-sans"
+                    title="Xóa vĩnh viễn file video/ảnh nguồn gốc này khỏi ổ cứng máy tính và thư viện"
+                  >
+                    <Trash2 className="w-3 h-3 text-red-400" />
+                    <span>Xóa Source Gốc</span>
+                  </button>
+                  <button
                     onClick={() => setSelectedClipId(null)}
                     className="text-slate-400 hover:text-white text-[10px] px-1 font-sans cursor-pointer"
                     title="Bỏ chọn"
@@ -1469,6 +1960,40 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
               <Scissors className="w-3.5 h-3.5 text-amber-400" />
               <span>Cắt Chuẩn 4-6s</span>
             </button>
+
+            {/* Trạng thái Tự Động Lưu Dự Án & Nút Lưu Ngay */}
+            <div className="flex items-center gap-1.5 bg-slate-900/90 px-2 py-1 rounded-lg border border-slate-800 text-[10px]">
+              {saveStatus === 'saving' ? (
+                <span className="text-amber-300 flex items-center gap-1 font-medium">
+                  <RefreshCw className="w-3 h-3 animate-spin text-amber-400" />
+                  <span className="hidden sm:inline">Đang lưu...</span>
+                </span>
+              ) : saveStatus === 'saved' ? (
+                <span className="text-emerald-400 flex items-center gap-1 font-medium" title={`Đã tự động lưu vào CSDL SQLite lúc ${lastSavedTime}`}>
+                  <Cloud className="w-3 h-3 text-emerald-400" />
+                  <span>Đã lưu {lastSavedTime && <span className="font-mono text-emerald-300/90 text-[9px]">({lastSavedTime})</span>}</span>
+                </span>
+              ) : saveStatus === 'error' ? (
+                <span className="text-red-400 flex items-center gap-1 font-medium">
+                  <span>⚠️ Lỗi lưu</span>
+                </span>
+              ) : (
+                <span className="text-slate-400 flex items-center gap-1 font-medium">
+                  <Cloud className="w-3 h-3 text-slate-500" />
+                  <span className="hidden sm:inline">Tự lưu: BẬT</span>
+                </span>
+              )}
+
+              <button
+                onClick={() => executeSaveProject(true)}
+                disabled={saveStatus === 'saving'}
+                className="ml-1 px-2 py-0.5 bg-amber-500/20 hover:bg-amber-500/35 text-amber-300 hover:text-white rounded text-[10px] font-bold border border-amber-500/40 flex items-center gap-1 transition cursor-pointer disabled:opacity-50"
+                title="Lưu ngay lập tức toàn bộ kịch bản và cài đặt vào CSDL SQLite"
+              >
+                <Save className="w-2.5 h-2.5 text-amber-400" />
+                <span>Lưu Ngay</span>
+              </button>
+            </div>
 
             <span className="text-slate-700 mx-1">|</span>
             <span className="text-[10px] text-slate-500 italic hidden lg:inline">
@@ -1932,7 +2457,9 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
             {/* Source Footage Grid */}
             <div className="flex-1 overflow-y-auto min-h-0 pr-1">
               {(() => {
-                const pool = (timelineData.availableSources && timelineData.availableSources.length > 0)
+                const pool = (localAvailableSources && localAvailableSources.length > 0)
+                  ? localAvailableSources
+                  : (timelineData.availableSources && timelineData.availableSources.length > 0)
                   ? timelineData.availableSources
                   : timelineData.clips.map((c) => ({
                       id: c.sourceId || c.id,
@@ -1975,7 +2502,7 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
                         <div
                           key={idx}
                           onClick={() => handleSelectProjectSource(src)}
-                          className="bg-slate-900/90 hover:bg-slate-850 border border-slate-800 hover:border-amber-400 rounded-xl overflow-hidden cursor-pointer group transition shadow-md hover:shadow-amber-500/20 flex flex-col"
+                          className="bg-slate-900/90 hover:bg-slate-850 border border-slate-800 hover:border-amber-400 rounded-xl overflow-hidden cursor-pointer group transition shadow-md hover:shadow-amber-500/20 flex flex-col relative"
                         >
                           {/* Stage bar */}
                           <div className="h-1 w-full" style={{ backgroundColor: stColor }} />
@@ -1991,6 +2518,18 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
                             ) : (
                               <div className="text-slate-600 text-xs">No Thumb</div>
                             )}
+
+                            {/* Nút Xóa File Gốc trên Card */}
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleRequestDeleteSourceFromModal(src);
+                              }}
+                              className="absolute top-1 right-1 w-6 h-6 rounded-md bg-black/80 hover:bg-red-600 text-slate-300 hover:text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition shadow border border-white/10 z-10 cursor-pointer"
+                              title="Xóa vĩnh viễn file nguồn gốc này khỏi ổ cứng"
+                            >
+                              <Trash2 className="w-3 h-3 text-red-400 hover:text-white" />
+                            </button>
 
                             {/* Badge type & duration */}
                             <span className="absolute bottom-1 right-1 bg-black/80 font-mono text-[9px] px-1.5 py-0.5 rounded text-amber-300 border border-amber-500/30 font-bold">
@@ -2118,6 +2657,355 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
           </div>
         </div>
       )}
+
+      {/* ════════ TRIM SOURCE VIDEO MODAL (2 ĐẦU) ════════ */}
+      {trimModal.isOpen && (
+        <div className="fixed inset-0 z-50 bg-black/90 backdrop-blur-md flex items-center justify-center p-4 md:p-6">
+          <div className="bg-[#111827] border-2 border-emerald-500/60 rounded-3xl p-5 md:p-6 max-w-2xl w-full flex flex-col shadow-2xl relative max-h-[92vh] overflow-hidden animate-in fade-in zoom-in duration-200">
+            {/* Header */}
+            <div className="flex items-center justify-between pb-3 mb-3 border-b border-slate-800 flex-shrink-0">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-2xl bg-emerald-500/20 text-emerald-400 flex items-center justify-center flex-shrink-0 border border-emerald-500/40">
+                  <Scissors className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="text-base font-extrabold text-slate-100 font-montserrat">
+                    Cắt Video Nguồn Gốc (2 Đầu)
+                  </h3>
+                  <p className="text-xs text-slate-400 truncate max-w-sm">
+                    {trimModal.fileName}
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setTrimModal((prev) => ({ ...prev, isOpen: false, isPlaying: false }))}
+                className="w-8 h-8 rounded-full bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white flex items-center justify-center text-xs font-bold transition cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Video Preview Player */}
+            <div className="relative w-full aspect-video bg-black rounded-2xl overflow-hidden shadow-inner border border-slate-800 flex items-center justify-center mb-4 flex-shrink-0">
+              <video
+                ref={trimmerVideoRef}
+                src={`/media/stream?path=${encodeURIComponent(trimModal.filePath)}`}
+                onTimeUpdate={handleTrimTimeUpdate}
+                playsInline
+                className="w-full h-full object-contain"
+                onClick={handleToggleTrimPreview}
+              />
+              
+              {/* Play Overlay Button */}
+              <button
+                onClick={handleToggleTrimPreview}
+                className="absolute inset-0 m-auto w-12 h-12 rounded-full bg-black/60 hover:bg-emerald-600/90 text-white flex items-center justify-center backdrop-blur-xs transition shadow-lg cursor-pointer border border-white/20"
+                style={{ opacity: trimModal.isPlaying ? 0 : 0.9 }}
+              >
+                {trimModal.isPlaying ? (
+                  <Pause className="w-5 h-5 fill-current" />
+                ) : (
+                  <Play className="w-5 h-5 fill-current ml-0.5" />
+                )}
+              </button>
+
+              {/* Time overlay badge */}
+              <div className="absolute bottom-2 left-2 bg-black/80 font-mono text-[10px] text-slate-300 px-2 py-0.5 rounded-lg border border-slate-700 flex items-center gap-1.5 pointer-events-none">
+                <span className="text-emerald-400 font-bold">{trimModal.currentTime.toFixed(1)}s</span>
+                <span className="text-slate-500">/</span>
+                <span>{trimModal.totalDuration.toFixed(1)}s</span>
+              </div>
+            </div>
+
+            {/* Dual Range Timeline Track & Handles */}
+            <div className="space-y-3 px-1 flex-shrink-0">
+              {/* Visual Selection Bar */}
+              <div className="relative h-7 bg-slate-950 rounded-xl border border-slate-800 overflow-hidden flex items-center select-none">
+                {/* Active trimmed region */}
+                <div
+                  className="absolute top-0 bottom-0 bg-emerald-500/30 border-x-2 border-emerald-400 shadow-sm"
+                  style={{
+                    left: `${(trimModal.startTime / Math.max(0.1, trimModal.totalDuration)) * 100}%`,
+                    width: `${((trimModal.endTime - trimModal.startTime) / Math.max(0.1, trimModal.totalDuration)) * 100}%`,
+                  }}
+                />
+
+                {/* Playhead indicator */}
+                <div
+                  className="absolute top-0 bottom-0 w-0.5 bg-yellow-400 shadow-sm z-10 pointer-events-none"
+                  style={{
+                    left: `${(trimModal.currentTime / Math.max(0.1, trimModal.totalDuration)) * 100}%`,
+                  }}
+                />
+
+                <div className="absolute inset-0 flex items-center justify-between px-2 text-[9px] font-mono text-slate-500 pointer-events-none">
+                  <span>0.0s</span>
+                  <span className="text-emerald-300 font-bold">
+                    Đoạn cắt: {(trimModal.endTime - trimModal.startTime).toFixed(1)}s
+                  </span>
+                  <span>{trimModal.totalDuration.toFixed(1)}s</span>
+                </div>
+              </div>
+
+              {/* Controls: Range Sliders */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+                {/* Start Time Slider & Input */}
+                <div className="p-2.5 bg-slate-900/90 border border-emerald-500/30 rounded-xl space-y-1.5">
+                  <div className="flex items-center justify-between text-[11px]">
+                    <span className="text-emerald-300 font-bold flex items-center gap-1">
+                      ◀ Điểm Bắt Đầu (In Point)
+                    </span>
+                    <span className="font-mono text-emerald-400 font-bold text-xs bg-emerald-950/80 px-1.5 py-0.5 rounded border border-emerald-500/30">
+                      {trimModal.startTime.toFixed(1)}s
+                    </span>
+                  </div>
+                  <input
+                    type="range"
+                    min="0"
+                    max={Math.max(0, trimModal.endTime - 0.5)}
+                    step="0.1"
+                    value={trimModal.startTime}
+                    onChange={(e) => handleStartTimeChange(Number(e.target.value))}
+                    className="w-full accent-emerald-500 h-1.5 bg-slate-800 rounded-lg cursor-pointer"
+                  />
+                  <div className="flex items-center justify-between gap-2 pt-0.5">
+                    <button
+                      onClick={() => handleStartTimeChange(Math.max(0, trimModal.startTime - 0.5))}
+                      className="px-2 py-0.5 bg-slate-800 hover:bg-slate-700 text-slate-300 text-[10px] rounded cursor-pointer"
+                    >
+                      -0.5s
+                    </button>
+                    <input
+                      type="number"
+                      min="0"
+                      max={Math.max(0, trimModal.endTime - 0.5)}
+                      step="0.1"
+                      value={trimModal.startTime}
+                      onChange={(e) => handleStartTimeChange(Number(e.target.value))}
+                      className="w-16 bg-slate-950 border border-slate-700 text-emerald-300 font-mono text-center text-xs py-0.5 rounded outline-none"
+                    />
+                    <button
+                      onClick={() => handleStartTimeChange(Math.min(trimModal.endTime - 0.5, trimModal.startTime + 0.5))}
+                      className="px-2 py-0.5 bg-slate-800 hover:bg-slate-700 text-slate-300 text-[10px] rounded cursor-pointer"
+                    >
+                      +0.5s
+                    </button>
+                  </div>
+                </div>
+
+                {/* End Time Slider & Input */}
+                <div className="p-2.5 bg-slate-900/90 border border-amber-500/30 rounded-xl space-y-1.5">
+                  <div className="flex items-center justify-between text-[11px]">
+                    <span className="text-amber-300 font-bold flex items-center gap-1">
+                      Điểm Kết Thúc (Out Point) ▶
+                    </span>
+                    <span className="font-mono text-amber-400 font-bold text-xs bg-amber-950/80 px-1.5 py-0.5 rounded border border-amber-500/30">
+                      {trimModal.endTime.toFixed(1)}s
+                    </span>
+                  </div>
+                  <input
+                    type="range"
+                    min={trimModal.startTime + 0.5}
+                    max={trimModal.totalDuration}
+                    step="0.1"
+                    value={trimModal.endTime}
+                    onChange={(e) => handleEndTimeChange(Number(e.target.value))}
+                    className="w-full accent-amber-500 h-1.5 bg-slate-800 rounded-lg cursor-pointer"
+                  />
+                  <div className="flex items-center justify-between gap-2 pt-0.5">
+                    <button
+                      onClick={() => handleEndTimeChange(Math.max(trimModal.startTime + 0.5, trimModal.endTime - 0.5))}
+                      className="px-2 py-0.5 bg-slate-800 hover:bg-slate-700 text-slate-300 text-[10px] rounded cursor-pointer"
+                    >
+                      -0.5s
+                    </button>
+                    <input
+                      type="number"
+                      min={trimModal.startTime + 0.5}
+                      max={trimModal.totalDuration}
+                      step="0.1"
+                      value={trimModal.endTime}
+                      onChange={(e) => handleEndTimeChange(Number(e.target.value))}
+                      className="w-16 bg-slate-950 border border-slate-700 text-amber-300 font-mono text-center text-xs py-0.5 rounded outline-none"
+                    />
+                    <button
+                      onClick={() => handleEndTimeChange(Math.min(trimModal.totalDuration, trimModal.endTime + 0.5))}
+                      className="px-2 py-0.5 bg-slate-800 hover:bg-slate-700 text-slate-300 text-[10px] rounded cursor-pointer"
+                    >
+                      +0.5s
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Warning & Info Note */}
+            <div className="my-3 p-2.5 bg-slate-900/60 border border-slate-800 rounded-xl flex items-center justify-between text-[11px] text-slate-400 flex-shrink-0">
+              <span className="flex items-center gap-1.5">
+                💡 Độ dài sau cắt: <strong className="text-emerald-300 font-mono">{(trimModal.endTime - trimModal.startTime).toFixed(1)}s</strong> (Gốc: {trimModal.totalDuration.toFixed(1)}s)
+              </span>
+              <span className="text-[10px] text-amber-400 font-medium hidden sm:inline">
+                ⚠️ File gốc sẽ được cắt vĩnh viễn và đồng bộ lại thư viện
+              </span>
+            </div>
+
+            {/* Action Buttons */}
+            <div className="flex items-center justify-between pt-2 border-t border-slate-800 flex-shrink-0">
+              <button
+                onClick={handleToggleTrimPreview}
+                className="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold rounded-xl flex items-center gap-1.5 transition cursor-pointer"
+              >
+                {trimModal.isPlaying ? <Pause className="w-3.5 h-3.5 fill-current" /> : <Play className="w-3.5 h-3.5 fill-current" />}
+                <span>{trimModal.isPlaying ? 'Dừng Xem Thử' : 'Xem Thử Đoạn Cắt'}</span>
+              </button>
+
+              <div className="flex items-center gap-2">
+                <button
+                  disabled={trimModal.isTrimming}
+                  onClick={() => setTrimModal((prev) => ({ ...prev, isOpen: false, isPlaying: false }))}
+                  className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold rounded-xl transition cursor-pointer"
+                >
+                  Hủy
+                </button>
+                <button
+                  disabled={trimModal.isTrimming}
+                  onClick={handleExecuteTrimSource}
+                  className="px-5 py-2 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white text-xs font-extrabold rounded-xl shadow-lg shadow-emerald-900/40 flex items-center gap-2 transition cursor-pointer disabled:opacity-50"
+                >
+                  {trimModal.isTrimming ? (
+                    <>
+                      <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                      <span>Đang Cắt Video...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Scissors className="w-3.5 h-3.5" />
+                      <span>Xác Nhận Cắt Vĩnh Viễn</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ════════ CONFIRM DELETE SOURCE MODAL ════════ */}
+      {deleteSourceModal.isOpen && (
+        <div className="fixed inset-0 z-50 bg-black/90 backdrop-blur-md flex items-center justify-center p-4">
+          <div className="bg-[#111827] border-2 border-red-500/60 rounded-3xl p-6 max-w-lg w-full flex flex-col shadow-2xl relative overflow-hidden animate-in fade-in zoom-in duration-200">
+            {/* Header */}
+            <div className="flex items-center gap-3 pb-3 mb-4 border-b border-slate-800">
+              <div className="w-10 h-10 rounded-2xl bg-red-500/20 text-red-400 flex items-center justify-center flex-shrink-0 border border-red-500/40">
+                <Trash2 className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="text-base font-extrabold text-red-200 font-montserrat">
+                  Xác Nhận Xóa File Nguồn Gốc
+                </h3>
+                <p className="text-xs text-slate-400">
+                  Hành động xóa vĩnh viễn dữ liệu trên ổ cứng máy tính
+                </p>
+              </div>
+            </div>
+
+            {/* Preview Card */}
+            <div className="bg-slate-950/80 border border-slate-800 rounded-2xl p-3 mb-4 flex items-center gap-3">
+              <div className="w-20 h-20 bg-black rounded-xl overflow-hidden flex-shrink-0 border border-slate-800 relative flex items-center justify-center">
+                {deleteSourceModal.thumbnailPath ? (
+                  <img
+                    src={`/media/thumbnails/${deleteSourceModal.thumbnailPath.split(/[\\/]/).pop()}`}
+                    alt={deleteSourceModal.fileName}
+                    className="w-full h-full object-cover"
+                  />
+                ) : (
+                  <Film className="w-8 h-8 text-slate-600" />
+                )}
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-xs font-bold text-slate-100 truncate" title={deleteSourceModal.fileName}>
+                  {deleteSourceModal.fileName}
+                </p>
+                <p className="text-[10px] text-slate-500 font-mono truncate mt-1" title={deleteSourceModal.filePath}>
+                  📁 {deleteSourceModal.filePath}
+                </p>
+                {deleteSourceModal.stage && (
+                  <span
+                    className="inline-block text-[8px] font-bold px-2 py-0.5 rounded-full mt-2 text-white"
+                    style={{
+                      backgroundColor: (STAGE_COLORS[deleteSourceModal.stage] || '#64748b') + '50',
+                      border: `1px solid ${STAGE_COLORS[deleteSourceModal.stage] || '#64748b'}80`,
+                    }}
+                  >
+                    {STAGE_LABELS[deleteSourceModal.stage] || deleteSourceModal.stage}
+                  </span>
+                )}
+              </div>
+            </div>
+
+            {/* Warning Box */}
+            <div className="bg-red-950/40 border border-red-500/40 rounded-2xl p-3.5 mb-5">
+              <p className="text-xs text-red-200 leading-relaxed font-medium">
+                ⚠️ <strong className="text-red-400">CẢNH BÁO NGUY HIỂM:</strong> File video/ảnh gốc này sẽ bị <strong>xóa vĩnh viễn khỏi ổ cứng máy tính</strong> và gỡ bỏ khỏi Thư viện.
+              </p>
+              <p className="text-[11px] text-red-300/80 mt-1.5 leading-relaxed">
+                Timeline sẽ tự động tìm kiếm một footage khác phù hợp trong kho nguồn để thay thế vào vị trí này, giữ nguyên 100% thời lượng slot và nhịp điệu video.
+              </p>
+            </div>
+
+            {/* Action Buttons */}
+            <div className="flex items-center justify-end gap-3 pt-2">
+              <button
+                disabled={deleteSourceModal.isDeleting}
+                onClick={() => setDeleteSourceModal((prev) => ({ ...prev, isOpen: false }))}
+                className="px-4 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-bold transition cursor-pointer"
+              >
+                Hủy Bỏ
+              </button>
+              <button
+                disabled={deleteSourceModal.isDeleting}
+                onClick={handleExecuteDeleteSource}
+                className="px-5 py-2.5 bg-gradient-to-r from-red-600 to-rose-700 hover:from-red-500 hover:to-rose-600 text-white rounded-xl text-xs font-extrabold shadow-lg shadow-red-900/40 flex items-center gap-2 transition cursor-pointer disabled:opacity-50"
+              >
+                {deleteSourceModal.isDeleting ? (
+                  <>
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                    <span>Đang Xóa File...</span>
+                  </>
+                ) : (
+                  <>
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>Xác Nhận Xóa Vĩnh Viễn</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ════════ TOAST NOTIFICATION ════════ */}
+      {notificationToast.show && (
+        <div className="fixed bottom-6 right-6 z-50 animate-in fade-in slide-in-from-bottom-5 duration-300">
+          <div
+            className={`px-4 py-3 rounded-2xl shadow-2xl border flex items-center gap-2.5 text-xs font-bold backdrop-blur-md ${
+              notificationToast.type === 'success'
+                ? 'bg-emerald-950/90 text-emerald-200 border-emerald-500/50 shadow-emerald-950/50'
+                : notificationToast.type === 'error'
+                ? 'bg-red-950/90 text-red-200 border-red-500/50 shadow-red-950/50'
+                : 'bg-slate-900/90 text-slate-200 border-slate-700 shadow-slate-950/50'
+            }`}
+          >
+            {notificationToast.type === 'success' ? (
+              <CheckCircle className="w-4 h-4 text-emerald-400 flex-shrink-0" />
+            ) : notificationToast.type === 'error' ? (
+              <Trash2 className="w-4 h-4 text-red-400 flex-shrink-0" />
+            ) : null}
+            <span>{notificationToast.message}</span>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
+
