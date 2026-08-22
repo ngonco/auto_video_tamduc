@@ -441,7 +441,17 @@ Hệ thống đã tạo sẵn bộ công cụ sao lưu tự động toàn bộ m
   - **Khắc phục toàn diện**:
     1. **Tạo mới 100% Thumbnail & Đo thời lượng thực tế**: Đã chạy tiến trình quét và tạo đủ 100% thumbnail cho toàn bộ 510 video trong thư viện SQLite, đo đạc chính xác thời lượng từng file bằng ffprobe.
     2. **Cơ chế Auto-Heal Timeline trong [TimelineEditor.tsx](file:///d:/DONG%20GOI%20TAM%20THOI/Auto_Video_TamDuc/src/components/EditorView/TimelineEditor.tsx)**: Tự động phát hiện bất kỳ clip nào có `sourceDuration > realDuration - sourceStart` hoặc thiếu thumbnail trên timeline, tự động giới hạn và tái phân bổ clip mượt mà 100% không để bất kỳ clip nào bị kéo dài quá độ dài file thật.
+- **Tự Động Lọc Xoá Clip < 2.0s Khi Nhúng AI & Nút Nhúng AI Toàn Bộ Thư Viện (Batch AI Embed & Auto-Purge Short Clips)**:
+  - **Tự Động Xoá Clip < 2s**: Ở bước Nhúng AI (`server/watcher.ts`), khi đo đạc video bằng `ffprobe`, nếu phát hiện video có thời lượng `< 2.0s`:
+    1. Tự động xoá file video gốc trên ổ cứng bằng `fs.unlinkSync()`.
+    2. Tự động xoá bản ghi tương ứng trong CSDL SQLite `video_sources`.
+    3. Cập nhật lại số lượng `total_videos` trong bảng `projects`.
+    ➔ Giúp thư viện luôn tinh gọn, sạch sẽ, chỉ giữ lại các video đạt chuẩn chất lượng từ 2.0s trở lên.
+  - **Nút "⚡ Nhúng AI Toàn Bộ Thư Viện"**:
+    - Backend: Endpoint `POST /api/library/projects/scan-all` và `GET /api/library/projects/scan-all-status` quản lý tiến trình nhúng AI lần lượt cho tất cả công trình trong thư viện.
+    - Frontend: Bổ sung nút bấm sang trọng `⚡ Nhúng AI Toàn Bộ` trên Header Thư Viện ([LibraryGrid.tsx](file:///d:/DONG%20GOI%20TAM%20THOI/Auto_Video_TamDuc/src/components/LibraryView/LibraryGrid.tsx)) kèm thanh tiến trình tổng thể hiển thị phần trăm và thông báo chi tiết theo thời gian thực.
 - **Build & Quality Assurance**: Dự án đã vượt qua bài kiểm tra `npx tsc --noEmit` và `npm run build` với 0 lỗi cú pháp, toàn bộ các luồng Thư viện, Tạo video nhanh, Dựng timeline và Xuất MP4 hoạt động trơn tru, ổn định tuyệt đối.
+
 
 
 

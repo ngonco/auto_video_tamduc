@@ -164,6 +164,65 @@ export const LibraryGrid: React.FC<LibraryGridProps> = ({ onSelectProjectForGene
     }
   };
 
+  const [scanningAll, setScanningAll] = useState(false);
+  const [scanAllProgress, setScanAllProgress] = useState<{ percent: number; message: string }>({
+    percent: 0,
+    message: '',
+  });
+
+  const handleScanAllProjects = async () => {
+    if (projects.length === 0) {
+      setToast({ type: 'error', text: 'Chưa có công trình nào trong thư viện.' });
+      return;
+    }
+
+    if (
+      !confirm(
+        `Bạn có muốn kích hoạt Nhúng AI cho toàn bộ ${projects.length} công trình trong thư viện?\n\n(Hệ thống sẽ tự động quét, phân loại 4 giai đoạn bằng AI và lọc xoá sạch các clip rác < 2s)`
+      )
+    ) {
+      return;
+    }
+
+    try {
+      setScanningAll(true);
+      setScanAllProgress({ percent: 0, message: 'Bắt đầu nhúng AI toàn bộ thư viện...' });
+
+      const res = await fetch('/api/library/projects/scan-all', { method: 'POST' });
+      const data = await res.json();
+      if (!data.success) {
+        setToast({ type: 'error', text: data.error || 'Lỗi bắt đầu nhúng AI' });
+        setScanningAll(false);
+        return;
+      }
+
+      const pollInterval = setInterval(async () => {
+        try {
+          const statusRes = await fetch('/api/library/projects/scan-all-status');
+          const statusData = await statusRes.json();
+          if (statusData.success) {
+            const job = statusData.data;
+            setScanAllProgress({ percent: job.percent, message: job.message });
+
+            if (job.status === 'completed') {
+              clearInterval(pollInterval);
+              setScanningAll(false);
+              setToast({ type: 'success', text: 'Đã hoàn tất nhúng AI cho toàn bộ thư viện!' });
+              fetchProjects();
+            } else if (job.status === 'error') {
+              clearInterval(pollInterval);
+              setScanningAll(false);
+              setToast({ type: 'error', text: job.message || 'Lỗi khi phân tích AI' });
+            }
+          }
+        } catch (_) {}
+      }, 1000);
+    } catch (err: any) {
+      setToast({ type: 'error', text: 'Lỗi nhúng AI: ' + err.message });
+      setScanningAll(false);
+    }
+  };
+
   const handleViewDetails = async (project: ProjectItem) => {
     setSelectedProjectDetail(project);
     try {
@@ -190,16 +249,27 @@ export const LibraryGrid: React.FC<LibraryGridProps> = ({ onSelectProjectForGene
             Thư Viện Source Công Trình
           </h2>
           <p className="text-sm text-slate-400 mt-1">
-            Chọn thư mục công trình thực tế trên máy, tự động quét video và phân loại 4 giai đoạn bằng AI
+            Chọn thư mục công trình thực tế trên máy, tự động quét video và phân loại 4 giai đoạn bằng AI (Tự động lọc xoá clip &lt; 2s)
           </p>
         </div>
 
         <div className="flex items-center gap-3">
+          {/* Nút Nhúng AI Toàn Bộ Thư Viện */}
+          <button
+            onClick={handleScanAllProjects}
+            disabled={scanningAll || importing || loading}
+            className="flex items-center gap-2 px-4 py-2.5 bg-gradient-to-r from-purple-600 via-indigo-600 to-blue-600 hover:from-purple-500 hover:to-blue-500 text-white rounded-xl text-xs font-bold shadow-lg shadow-purple-500/20 transition active:scale-95 disabled:opacity-50 cursor-pointer"
+            title="Quét, phân loại 4 giai đoạn bằng AI và dọn clip < 2s cho toàn bộ công trình"
+          >
+            <Sparkles className={`w-4 h-4 text-amber-300 ${scanningAll ? 'animate-spin' : ''}`} />
+            <span>{scanningAll ? `Đang Nhúng AI (${scanAllProgress.percent}%)...` : '⚡ Nhúng AI Toàn Bộ'}</span>
+          </button>
+
           {/* Nút Chọn Thư Mục Công Trình Chính */}
           <button
             onClick={handlePickAndImport}
-            disabled={importing}
-            className="flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-amber-500 to-yellow-500 hover:from-amber-600 hover:to-yellow-600 text-slate-950 rounded-xl text-xs font-extrabold shadow-lg shadow-amber-500/20 transition active:scale-95 disabled:opacity-50"
+            disabled={importing || scanningAll}
+            className="flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-amber-500 to-yellow-500 hover:from-amber-600 hover:to-yellow-600 text-slate-950 rounded-xl text-xs font-extrabold shadow-lg shadow-amber-500/20 transition active:scale-95 disabled:opacity-50 cursor-pointer"
             title="Mở cửa sổ chọn thư mục công trình (có danh sách thư mục đã Pin)"
           >
             {importing ? (
@@ -212,7 +282,8 @@ export const LibraryGrid: React.FC<LibraryGridProps> = ({ onSelectProjectForGene
 
           <button
             onClick={fetchProjects}
-            className="flex items-center gap-2 px-4 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl text-xs font-semibold border border-slate-700 transition active:scale-95"
+            disabled={scanningAll}
+            className="flex items-center gap-2 px-4 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl text-xs font-semibold border border-slate-700 transition active:scale-95 cursor-pointer disabled:opacity-50"
             title="Làm mới danh sách công trình"
           >
             <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
@@ -220,6 +291,31 @@ export const LibraryGrid: React.FC<LibraryGridProps> = ({ onSelectProjectForGene
           </button>
         </div>
       </div>
+
+      {/* Progress Banner Khi Nhúng AI Toàn Bộ Thư Viện */}
+      {scanningAll && (
+        <div className="mb-6 p-4 rounded-2xl bg-gradient-to-r from-purple-900/40 via-slate-900/60 to-indigo-900/40 border border-purple-500/40 shadow-xl shadow-purple-500/10 animate-fade-in">
+          <div className="flex items-center justify-between gap-4 mb-2">
+            <div className="flex items-center gap-2.5">
+              <Sparkles className="w-5 h-5 text-amber-300 animate-spin" />
+              <span className="text-sm font-bold text-slate-100">
+                Đang Nhúng AI & Phân Loại 4 Giai Đoạn Toàn Bộ Thư Viện
+              </span>
+            </div>
+            <span className="text-xs font-extrabold text-purple-400">
+              {scanAllProgress.percent}%
+            </span>
+          </div>
+
+          <div className="w-full bg-slate-800 h-2.5 rounded-full overflow-hidden mb-2">
+            <div
+              className="bg-gradient-to-r from-purple-500 via-indigo-500 to-amber-400 h-full rounded-full transition-all duration-300"
+              style={{ width: `${Math.max(2, scanAllProgress.percent)}%` }}
+            />
+          </div>
+
+        </div>
+      )}
 
       {/* Toast Notification */}
       {toast && (

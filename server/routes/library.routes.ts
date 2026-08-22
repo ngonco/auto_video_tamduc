@@ -136,6 +136,52 @@ libraryRouter.post('/projects/:id/scan', async (req, res) => {
   }
 });
 
+// Trigger quét và nhúng AI cho TOÀN BỘ thư viện
+libraryRouter.post('/projects/scan-all', async (req, res) => {
+  try {
+    activeScanJobs['ALL'] = {
+      status: 'scanning',
+      percent: 0,
+      message: 'Bắt đầu tiến trình phân tích AI cho toàn bộ thư viện...',
+    };
+
+    res.json({ success: true, message: 'Đã bắt đầu tiến trình phân tích AI cho toàn bộ thư viện' });
+
+    // Chạy phân tích nền
+    folderWatcher.scanAndEmbedAllProjects((percent, message) => {
+      activeScanJobs['ALL'] = {
+        status: percent >= 100 ? 'completed' : 'scanning',
+        percent,
+        message,
+      };
+    })
+      .then(() => {
+        activeScanJobs['ALL'] = {
+          status: 'completed',
+          percent: 100,
+          message: 'Đã hoàn tất phân tích AI cho toàn bộ thư viện!',
+        };
+      })
+      .catch((err) => {
+        console.error('[LibraryRoutes] Error scanning all projects:', err);
+        activeScanJobs['ALL'] = {
+          status: 'error',
+          percent: 0,
+          message: `Lỗi phân tích AI: ${err.message}`,
+          error: err.message,
+        };
+      });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Lấy trạng thái tiến độ quét AI toàn bộ
+libraryRouter.get('/projects/scan-all-status', (req, res) => {
+  const job = activeScanJobs['ALL'] || { status: 'idle', percent: 0, message: '' };
+  res.json({ success: true, data: job });
+});
+
 // Lấy trạng thái tiến độ quét AI
 libraryRouter.get('/projects/:id/scan-status', (req, res) => {
   const projectId = req.params.id;

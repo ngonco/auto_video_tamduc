@@ -179,8 +179,31 @@ export class FolderWatcherService {
     // 2. Chạy phân tích AI song song 4 luồng (Concurrency Pool)
     await runWithConcurrency(videos, 4, async (video) => {
       try {
+        if (!fs.existsSync(video.file_path)) {
+          db.prepare('DELETE FROM video_sources WHERE id = ?').run(video.id);
+          completed++;
+          return;
+        }
+
         // Đo đạc metadata
         const meta = await getVideoMetadata(video.file_path);
+        const isImage = isImageFile(video.file_path);
+
+        // [QUY TẮC XOÁ CLIP < 2S]: Nếu là video có thời lượng ngắn hơn 2.0s -> Tự động xoá file trên đĩa & CSDL
+        if (!isImage && meta.duration > 0 && meta.duration < 2.0) {
+          console.log(`[Watcher] Video clip "${video.file_name}" (${meta.duration.toFixed(2)}s < 2.0s) quá ngắn. Tự động xoá khỏi đĩa và CSDL...`);
+          try {
+            if (fs.existsSync(video.file_path)) {
+              fs.unlinkSync(video.file_path);
+            }
+          } catch (e: any) {
+            console.warn(`[Watcher] Không thể xoá file ${video.file_path}:`, e.message);
+          }
+          // Xoá bản ghi khỏi CSDL SQLite
+          db.prepare('DELETE FROM video_sources WHERE id = ?').run(video.id);
+          completed++;
+          return;
+        }
 
         // Trích xuất 2-3 frame ảnh đại diện
         const { framePaths, thumbnailPath } = await extractKeyframes(video.file_path, video.id, meta.duration);
@@ -219,15 +242,51 @@ export class FolderWatcherService {
       }
     });
 
-    // 3. Đánh dấu project đã nhúng xong
+    // 3. Cập nhật lại tổng số video còn lại sau khi lọc xóa clip < 2s và đánh dấu project đã nhúng xong
+    const remainingCount = (db.prepare('SELECT COUNT(*) as count FROM video_sources WHERE project_id = ?').get(projectId) as any)?.count || 0;
     db.prepare(`
       UPDATE projects 
-      SET is_embedded = 1, stage_summary = ?, last_scanned_at = datetime('now') 
+      SET total_videos = ?, is_embedded = 1, stage_summary = ?, last_scanned_at = datetime('now') 
       WHERE id = ?
-    `).run(JSON.stringify(stageCounts), projectId);
+    `).run(remainingCount, JSON.stringify(stageCounts), projectId);
 
     if (onProgress) {
       onProgress(100, 'Đã hoàn tất phân tích toàn bộ công trình!');
+    }
+  }
+
+  /**
+   * Quét và Nhúng AI cho TOÀN BỘ Thư Viện (Tất cả công trình)
+   */
+  public async scanAndEmbedAllProjects(onProgress?: (percent: number, message: string) => void): Promise<void> {
+    const projects: any[] = db.prepare('SELECT id, folder_name FROM projects ORDER BY created_at ASC').all();
+    if (projects.length === 0) {
+      throw new Error('Chưa có công trình nào trong thư viện.');
+    }
+
+    if (onProgress) {
+      onProgress(2, `Bắt đầu phân tích AI cho toàn bộ ${projects.length} công trình...`);
+    }
+
+    for (let i = 0; i < projects.length; i++) {
+      const proj = projects[i];
+      const basePct = Math.round((i / projects.length) * 100);
+      const nextPct = Math.round(((i + 1) / projects.length) * 100);
+
+      try {
+        await this.scanAndEmbedProject(proj.id, (subPct, subMsg) => {
+          if (onProgress) {
+            const overallPct = Math.min(99, Math.round(basePct + (subPct / 100) * (nextPct - basePct)));
+            onProgress(overallPct, `[${i + 1}/${projects.length} - ${proj.folder_name}]: ${subMsg}`);
+          }
+        });
+      } catch (err: any) {
+        console.error(`[Watcher] Error scanning project ${proj.folder_name} in batch:`, err.message);
+      }
+    }
+
+    if (onProgress) {
+      onProgress(100, 'Đã hoàn tất phân tích AI cho toàn bộ thư viện!');
     }
   }
 
