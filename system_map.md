@@ -480,6 +480,27 @@ Hệ thống đã tạo sẵn bộ công cụ sao lưu tự động toàn bộ m
     + Tự động co clip cuối hoặc bù footage thông minh để tổng thời lượng clip luôn khớp chuẩn xác 100% với thời lượng Voice đọc.
   - **Bảo vệ chống đứng hình (No-Freeze Guarantee)**:
     + Giới hạn tối đa theo độ dài file video gốc thực tế (`realDuration - sourceStart`), đối với ảnh tĩnh cho phép kéo dài tùy ý, bảo đảm video preview và render không bao giờ bị đứng hình.
+- **Tái Cấu Trúc Giao Diện Timeline Thông Minh Chuẩn Pro NLE (Clip Inspector & Balanced Toolbar)**:
+  - **Bảng Thuộc Tính Clip Chuyên Dụng (Right Sidebar Clip Inspector)**:
+    + Tự động chuyển đổi giữa 2 tab: `[⚡ Chỉnh Sửa Clip]` (khi nhấp chọn clip) và `[⚙️ Cài Đặt Dự Án]` (khi không chọn clip hoặc cấu hình BGM/Phụ đề/Outro).
+    + Hiển thị đầy đủ thông tin: Ảnh thumbnail xem trước to rõ, Badge Stage màu sắc, thanh trượt thời lượng mượt mà, ô nhập số lẻ chính xác, các nút `-1s`, `-0.5s`, `+0.5s`, `+1s`, nút `⚡ Lấy Tối Đa`, các nút Đổi từ Máy tính, Đổi từ Công trình, Cắt Source gốc, Xóa clip, và cụm duyệt clip trước/sau `[◀ Clip #i]` `[Clip #i+2 ▶]`.
+  - **Thẻ Clip Trên Timeline Tinh Gọn (Pro NLE Cards)**:
+    + Loại bỏ hoàn toàn các nút con bên trong thẻ để chống bấm nhầm; giữ lại ảnh Thumbnail to tràn viền sắc nét, Header Stage và 2 Tay kéo Resize 2 đầu mượt mà.
+  - **Thanh Công Cụ Timeline Dưới Cân Đối 3 Khối**:
+    + *Khối Trái*: Play/Pause (Space) + Timecode thời gian thực & Frame.
+    + *Khối Giữa*: Badge Outro (Bật/Tắt) + Tổng số clip + Trạng thái tự lưu SQLite.
+    + *Khối Phải*: Nút Cắt chuẩn 4-6s + Fit toàn bộ + Cụm Zoom + Nút Lưu ngay.
+- **Layout Studio 9:16 Chuyên Nghiệp (Full-Height Right Canvas & Left 3-Column Smart Panel)**:
+  - **Cột Phải - Video Preview 9:16 Tràn Viền Tối Giản (Borderless Canvas)**:
+    + Chiếm trọn 100% chiều cao màn hình từ dưới Header xuống đáy (`h-full`, `aspect-[9/16]`).
+    + Remotion Player hiển thị cực đại, sắc nét từng chi tiết, loại bỏ hoàn toàn viền đen thừa lãng phí 2 bên.
+  - **Cột Trái - Tầng Trên: Lưới 3 Cột Thông Minh**:
+    + Tận dụng chiều ngang rộng rãi phân bổ thành 3 cột trực quan không cần cuộn chuột.
+    + Khi chọn clip: Cột 1 (Info & Thumbnail) • Cột 2 (Thời lượng, Steppers, Slider, Max) • Cột 3 (Đổi file máy tính/công trình, Cắt source, Xóa, Duyệt clip).
+    + Khi xem Cài đặt dự án: Cột 1 (Info & Voice volume) • Cột 2 (BGM & Volume) • Cột 3 (Phụ đề & Outro).
+    + Nút `[⚡ XUẤT VIDEO (MP4 1080x1920)]` ghim nổi bật ở Header tác vụ trên cùng bên trái.
+  - **Cột Trái - Tầng Dưới: Timeline Tracks Cao Ráo (`h-[340px]`)**:
+    + Không gian rộng rãi, thoáng mắt cho Ruler, Video track và Subtitle track.
 - **Build & Quality Assurance**: Dự án đã vượt qua bài kiểm tra `npx tsc --noEmit` và `npm run build` với 0 lỗi cú pháp, toàn bộ các luồng Thư viện, Tạo video nhanh, Dựng timeline và Xuất MP4 hoạt động trơn tru, ổn định tuyệt đối.
 
 
