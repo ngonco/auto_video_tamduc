@@ -422,7 +422,14 @@ Hệ thống đã tạo sẵn bộ công cụ sao lưu tự động toàn bộ m
     1. Loại bỏ prompt dài gây nhiễu trong Whisper STT, đảm bảo nhận diện chính xác 100% văn bản giọng đọc xuyên suốt toàn bộ thời lượng.
     2. Triển khai **Two-Pass STT Safety Engine**: Tự động đo thời lượng chính xác của voice; nếu từ cuối cùng kết thúc trước mốc audio > 3.5s, tự động cắt lát audio đuôi và chạy Pass 2 để bù đắp từ bị thiếu.
     3. Thêm cơ chế **Auto-Heal STT Cache**: Khi nạp voice từ cache, nếu phát hiện bản ghi cũ bị thiếu đuôi (< 85% thời lượng voice), hệ thống tự động nhận diện lại toàn diện và chữa lành 100% phụ đề trong CSDL SQLite.
+- **Khắc Phục Triệt Để Lỗi Font Tiếng Việt Của File Âm Thanh & Video (UTF-8 Mojibake Fix)**:
+  - Nguyên nhân gốc: Khi upload file qua trình duyệt bằng Multer/Busboy, `req.file.originalname` mặc định bị giải mã nhầm theo bảng mã Latin-1 (ISO-8859-1) thay vì UTF-8, khiến các tên file tiếng Việt có dấu (như *"CHÂN LÝ ĐẾN VỚI CUỘC ĐỜI.mp3"*) bị biến thành chuỗi rác ký tự (*"CHÃ‚N LÃ  Ä áº¾N Vá»šI CUá»˜C Ä á»œI.mp3"*).
+  - Khắc phục:
+    1. Bổ sung hàm tiện ích `fixUtf8Filename()` trong `server/routes/generator.routes.ts` tự động phát hiện và giải mã nhị phân chuẩn xác sang UTF-8.
+    2. Áp dụng `fixUtf8Filename()` xuyên suốt các điểm tiếp nhận: `/upload-voice`, `/pick-voice`, `/process-voice`, `/save-project` và `/voices`.
+    3. Tự động kiểm tra và sửa chữa sạch sẽ các bản ghi có tên bị lỗi font trong CSDL SQLite khi truy vấn danh sách Voice.
 - **Build & Quality Assurance**: Dự án đã vượt qua bài kiểm tra `npx tsc --noEmit` và `npm run build` với 0 lỗi cú pháp, toàn bộ các luồng Thư viện, Tạo video nhanh, Dựng timeline và Xuất MP4 hoạt động trơn tru, ổn định tuyệt đối.
+
 
 
 

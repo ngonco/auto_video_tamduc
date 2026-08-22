@@ -30,6 +30,23 @@ const storage = multer.diskStorage({
 const upload = multer({ storage });
 export const generatorRouter = Router();
 
+/**
+ * Tự động sửa lỗi hiển thị tiếng Việt (Mojibake UTF-8 bị đọc nhầm dạng Latin-1 khi upload/picker)
+ */
+export function fixUtf8Filename(name: string): string {
+  if (!name) return '';
+  try {
+    // Nếu chuỗi chứa các ký tự mojibake UTF-8 bị đọc nhầm thành Latin-1
+    if (/[\u00C0-\u00FF][\u0080-\u00FF]/.test(name) || name.includes('Ã') || name.includes('Ä') || name.includes('áº') || name.includes('Vá»') || name.includes('CUá»') || name.includes('Äá')) {
+      const decoded = Buffer.from(name, 'latin1').toString('utf8');
+      if (decoded && !decoded.includes('\uFFFD')) {
+        return decoded;
+      }
+    }
+  } catch (_) {}
+  return name;
+}
+
 // 1. Upload file Voice qua Web
 generatorRouter.post('/upload-voice', upload.single('voice'), (req, res) => {
   try {
@@ -37,10 +54,12 @@ generatorRouter.post('/upload-voice', upload.single('voice'), (req, res) => {
       return res.status(400).json({ success: false, error: 'Không tìm thấy file voice tải lên' });
     }
 
+    const cleanOriginalName = fixUtf8Filename(req.file.originalname);
+
     res.json({
       success: true,
       file: {
-        originalName: req.file.originalname,
+        originalName: cleanOriginalName,
         filePath: req.file.path,
         fileName: req.file.filename,
         size: req.file.size,
@@ -73,7 +92,7 @@ generatorRouter.post('/pick-voice', (req, res) => {
         }
 
         const stat = fs.statSync(selectedPath);
-        const fileName = path.basename(selectedPath);
+        const fileName = fixUtf8Filename(path.basename(selectedPath));
 
         res.json({
           success: true,
@@ -157,6 +176,13 @@ generatorRouter.get('/voices', (req, res) => {
   try {
     const voices = db.prepare(`SELECT * FROM voices ORDER BY created_at DESC`).all();
     const formatted = voices.map((v: any) => {
+      const cleanFileName = fixUtf8Filename(v.file_name);
+      if (cleanFileName !== v.file_name) {
+        try {
+          db.prepare('UPDATE voices SET file_name = ? WHERE id = ?').run(cleanFileName, v.id);
+        } catch (_) {}
+      }
+
       const rawWords = v.raw_words_json ? JSON.parse(v.raw_words_json) : [];
       let subs = v.subtitles_json ? JSON.parse(v.subtitles_json) : [];
 
@@ -169,11 +195,17 @@ generatorRouter.get('/voices', (req, res) => {
         } catch (_) {}
       }
 
+      let timelineProject = v.timeline_project_json ? JSON.parse(v.timeline_project_json) : null;
+      if (timelineProject && timelineProject.projectName) {
+        timelineProject.projectName = fixUtf8Filename(timelineProject.projectName);
+      }
+
       return {
         ...v,
+        file_name: cleanFileName,
         raw_words: rawWords,
         subtitles: subs,
-        timeline_project: v.timeline_project_json ? JSON.parse(v.timeline_project_json) : null,
+        timeline_project: timelineProject,
       };
     });
     res.json({ success: true, data: formatted });
@@ -249,7 +281,7 @@ generatorRouter.post('/process-voice', async (req, res) => {
     const polishedSubtitles = await polishAndSegmentSubtitles(sttResult.text, sttResult.words);
 
     const voiceId = 'voice_' + uuidv4().slice(0, 8);
-    const fileName = originalName || path.basename(filePath);
+    const fileName = fixUtf8Filename(originalName || path.basename(filePath));
 
     // Bước 3: Ghi nhớ vào SQLite database
     db.prepare(`
@@ -517,8 +549,10 @@ generatorRouter.post('/save-project', (req, res) => {
       return res.status(400).json({ success: false, error: 'Thiếu voicePath/voiceId hoặc timelineData' });
     }
 
+    const cleanProjectName = fixUtf8Filename(timelineData.projectName);
     const projectJson = JSON.stringify({
       ...timelineData,
+      projectName: cleanProjectName,
       updatedAt: new Date().toISOString(),
     });
 
