@@ -885,14 +885,42 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
     [voiceDuration]
   );
 
-  // ── Tự động chuẩn hóa lại clips khớp chính xác 100% voiceDuration nếu session trước bị kéo lệch ──
+  // ── Tự động chuẩn hóa lại clips & chữa lành thời lượng vượt quá file thực tế (No-Freeze) ──
   useEffect(() => {
     if (!timelineData.clips || timelineData.clips.length === 0 || voiceDuration <= 0) return;
-    const currentSum = timelineData.clips.reduce((acc, c) => acc + (c.sourceDuration || 0), 0);
-    if (Math.abs(currentSum - voiceDuration) > 0.15) {
-      onUpdateClips(recalcTimelinePositions(timelineData.clips));
+    const pool = (localAvailableSources && localAvailableSources.length > 0)
+      ? localAvailableSources
+      : (timelineData.availableSources && timelineData.availableSources.length > 0)
+      ? timelineData.availableSources
+      : [];
+
+    let hasInvalidClips = false;
+    const sanitizedClips = timelineData.clips.map((c) => {
+      const isImg = c.mediaType === 'image' || isImageFile(c.filePath);
+      const srcMatch = pool.find((p) => p.id === c.sourceId || p.filePath === c.filePath);
+      let thumb = c.thumbnailPath;
+      if (!thumb && srcMatch?.thumbnailPath) {
+        thumb = srcMatch.thumbnailPath;
+        hasInvalidClips = true;
+      }
+
+      if (!isImg && srcMatch && srcMatch.duration > 0) {
+        const maxAvail = Math.max(0.5, srcMatch.duration - (c.sourceStart || 0));
+        if (c.sourceDuration > maxAvail + 0.1) {
+          hasInvalidClips = true;
+        }
+      }
+      return {
+        ...c,
+        thumbnailPath: thumb || c.thumbnailPath,
+      };
+    });
+
+    const currentSum = sanitizedClips.reduce((acc, c) => acc + (c.sourceDuration || 0), 0);
+    if (hasInvalidClips || Math.abs(currentSum - voiceDuration) > 0.15) {
+      onUpdateClips(rebalanceClips(sanitizedClips));
     }
-  }, [voiceDuration, recalcTimelinePositions, onUpdateClips]);
+  }, [voiceDuration, localAvailableSources, timelineData.availableSources, rebalanceClips, onUpdateClips]);
 
   // ── Clip manipulation ──
   const handleMoveClip = useCallback(
