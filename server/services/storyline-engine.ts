@@ -138,6 +138,12 @@ export function generateStoryline(
     lastUsedAt: s.lastUsedAt || s.last_used_at || '',
   }));
 
+  // [QUY TẮC 100% VIDEO]: Nếu thư viện có bất kỳ Video nào, chỉ dùng Video chuyển động, tuyệt đối KHÔNG chọn ảnh tĩnh gây đứng hình
+  const hasAnyVideos = normalizedSources.some((c) => c.mediaType === 'video' && !isImageFile(c.filePath));
+  const activeSources = hasAnyVideos
+    ? normalizedSources.filter((c) => c.mediaType === 'video' && !isImageFile(c.filePath))
+    : normalizedSources;
+
   // 2. Nhóm source theo 4 giai đoạn
   const clipsByStage: Record<string, SourceClipRecord[]> = {
     STAGE_1_RAW_CARPENTRY: [],
@@ -146,7 +152,7 @@ export function generateStoryline(
     STAGE_4_WORSHIP_ALTAR: [],
   };
 
-  normalizedSources.forEach((clip) => {
+  activeSources.forEach((clip) => {
     const stage = clip.stage || 'STAGE_2_ASSEMBLY_FINISHING';
     if (!clipsByStage[stage]) {
       clipsByStage[stage] = [];

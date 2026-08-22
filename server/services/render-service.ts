@@ -196,31 +196,31 @@ export async function renderFinalVideo(
         // Xử lý Ảnh tĩnh: Lặp ảnh và phóng to nhẹ Ken Burns
         command
           .input(clip.filePath)
-          .inputOptions(['-loop 1', `-t ${duration}`]);
+          .inputOptions(['-loop 1', `-t ${duration.toFixed(3)}`]);
 
         const filterString = `[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1,fps=30,format=yuv420p[outv]`;
 
         command
           .complexFilter(filterString)
           .noAudio()
-          .outputOptions(['-map [outv]', '-c:v libx264', '-preset ultrafast', '-threads 0', '-tune fastdecode', '-crf 22', '-pix_fmt yuv420p', `-t ${duration}`])
+          .outputOptions(['-map [outv]', '-c:v libx264', '-preset ultrafast', '-threads 0', '-tune fastdecode', '-crf 22', '-r 30', '-pix_fmt yuv420p', `-t ${duration.toFixed(3)}`])
           .output(outClip)
           .on('end', () => resolve())
           .on('error', (err) => reject(err))
           .run();
       } else {
-        // Xử lý Video clip: Cắt trực tiếp từ mốc sourceStart với thời lượng thực tế
+        // Xử lý Video clip: Đệm tpad clone để đảm bảo 100% không bao giờ thiếu frame
         command
           .input(clip.filePath)
           .setStartTime(clip.sourceStart || 0)
           .setDuration(duration);
 
-        const filterString = `[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1,fps=30,format=yuv420p[outv]`;
+        const filterString = `[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1,fps=30,tpad=stop_mode=clone:stop_duration=5,format=yuv420p[outv]`;
 
         command
           .complexFilter(filterString)
           .noAudio()
-          .outputOptions(['-map [outv]', '-c:v libx264', '-preset ultrafast', '-threads 0', '-tune fastdecode', '-crf 22', '-pix_fmt yuv420p', `-t ${duration}`])
+          .outputOptions(['-map [outv]', '-c:v libx264', '-preset ultrafast', '-threads 0', '-tune fastdecode', '-crf 22', '-r 30', '-pix_fmt yuv420p', `-t ${duration.toFixed(3)}`])
           .output(outClip)
           .on('end', () => resolve())
           .on('error', (err) => reject(err))
@@ -238,7 +238,6 @@ export async function renderFinalVideo(
   });
 
   const normalizedClipPaths = normalizedClips.map((c) => c.path);
-  const clipDurations = normalizedClips.map((c) => c.duration);
 
   if (onProgress) {
     onProgress(50, 'Đang hòa trộn chuyển cảnh Cross Dissolve giữa các clip...');
@@ -249,36 +248,65 @@ export async function renderFinalVideo(
   if (normalizedClipPaths.length === 1) {
     fs.copyFileSync(normalizedClipPaths[0], stitchedVideoPath);
   } else {
+    // Đo đạc thời lượng thực tế từng clip đã xuất ra đĩa để đảm bảo offset xfade 100% khớp chuẩn
+    const probeDurations = await Promise.all(
+      normalizedClipPaths.map(async (p, idx) => {
+        try {
+          const meta = await getVideoMetadata(p);
+          return meta.duration && meta.duration > 0 ? meta.duration : normalizedClips[idx].duration;
+        } catch {
+          return normalizedClips[idx].duration;
+        }
+      })
+    );
+
     let concatCommand = ffmpeg();
     normalizedClipPaths.forEach((p) => concatCommand.input(p));
 
     const filterChains: string[] = [];
-    let currentAccumulated = clipDurations[0];
+    let currentAccumulated = probeDurations[0];
 
     for (let i = 1; i < normalizedClipPaths.length; i++) {
       const prevLabel = i === 1 ? '[0:v]' : `[v${i - 1}]`;
       const nextLabel = `[${i}:v]`;
       const isLast = i === normalizedClipPaths.length - 1;
       const outLabel = isLast ? '[v_xfade_end]' : `[v${i}]`;
-      const actualTrans = Math.min(transDur, clipDurations[i - 1] * 0.4, clipDurations[i] * 0.4);
+      const actualTrans = Math.min(transDur, probeDurations[i - 1] * 0.35, probeDurations[i] * 0.35);
       const offset = Math.max(0.1, currentAccumulated - actualTrans);
 
       filterChains.push(`${prevLabel}${nextLabel}xfade=transition=fade:duration=${actualTrans.toFixed(2)}:offset=${offset.toFixed(2)}${outLabel}`);
-      currentAccumulated = currentAccumulated + clipDurations[i] - actualTrans;
+      currentAccumulated = currentAccumulated + probeDurations[i] - actualTrans;
     }
 
     // Thêm tpad để đảm bảo khung hình cuối cùng giữ nguyên
     filterChains.push(`[v_xfade_end]tpad=stop_mode=clone:stop_duration=5,format=yuv420p[outv]`);
 
-    await new Promise<void>((resolve, reject) => {
-      concatCommand
-        .complexFilter(filterChains.join('; '))
-        .outputOptions(['-map [outv]', '-c:v libx264', '-preset ultrafast', '-threads 0', '-crf 20', '-pix_fmt yuv420p'])
-        .output(stitchedVideoPath)
-        .on('end', () => resolve())
-        .on('error', (err) => reject(err))
-        .run();
-    });
+    try {
+      await new Promise<void>((resolve, reject) => {
+        concatCommand
+          .complexFilter(filterChains.join('; '))
+          .outputOptions(['-map [outv]', '-c:v libx264', '-preset ultrafast', '-threads 0', '-crf 20', '-pix_fmt yuv420p'])
+          .output(stitchedVideoPath)
+          .on('end', () => resolve())
+          .on('error', (err) => reject(err))
+          .run();
+      });
+    } catch (xfadeErr) {
+      console.warn('[Render] xfade error, falling back to direct concat:', xfadeErr);
+      const concatInputs = normalizedClipPaths.map((_, i) => `[${i}:v]`).join('');
+      const fallbackFilter = `${concatInputs}concat=n=${normalizedClipPaths.length}:v=1:a=0,format=yuv420p[outv]`;
+      let fallbackCmd = ffmpeg();
+      normalizedClipPaths.forEach((p) => fallbackCmd.input(p));
+      await new Promise<void>((res, rej) => {
+        fallbackCmd
+          .complexFilter(fallbackFilter)
+          .outputOptions(['-map [outv]', '-c:v libx264', '-preset ultrafast', '-threads 0', '-crf 20', '-pix_fmt yuv420p'])
+          .output(stitchedVideoPath)
+          .on('end', () => res())
+          .on('error', (err) => rej(err))
+          .run();
+      });
+    }
   }
 
   if (onProgress) {

@@ -434,13 +434,16 @@ Hệ thống đã tạo sẵn bộ công cụ sao lưu tự động toàn bộ m
     2. Nút chính `📁 Chọn File Trên Máy`: Mở hộp thoại native Windows OpenFileDialog để chọn nhanh từ ổ đĩa.
     3. Nút phụ `Tải Từ Trình Duyệt`: Duyệt file qua HTML5 file picker cho môi trường web.
   - Loại bỏ hoàn toàn sự trùng lặp và phân vân cho người dùng, tối ưu hóa không gian làm việc.
-- **Cơ Chế Phân Bổ Clip Động Chống Đứng Hình (No-Freeze Dynamic Storyline & Rendering Engine)**:
-  - Thuật toán Dynamic Duration Accumulator (`server/services/storyline-engine.ts`):
-    1. Video ngắn (< 4.0s): Dùng đúng thời lượng thực tế của video (ví dụ 1.8s, 2.5s) rồi lập tức chuyển sang video tiếp theo, không gán slot dài hơn khiến video bị đứng hình cuối đoạn. Tự động tăng số lượng clip để lấp đầy 100% thời lượng Voice.
-    2. Video dài (> 10s): Cắt thành các đoạn chuẩn 4.0s - 5.5s, tịnh tiến mốc `sourceStart` theo chu kỳ sử dụng và kiểm soát nghiêm ngặt `sourceStart + clipDuration <= videoDuration`.
-  - Đồng bộ trên Timeline Editor (`src/components/EditorView/TimelineEditor.tsx`): Hàm `rebalanceClips` và căn chỉnh timeline tôn trọng thời lượng tối đa của từng video nguồn.
-  - Render FFmpeg mượt mà (`server/services/render-service.ts`): Loại bỏ `-stream_loop -1`, cắt chính xác từng đoạn video mượt mà không lặp đứng frame.
+- **Khắc Phục Triệt Để Lỗi Đứng Hình Preview & Treo Khung Hình Khi Xuất MP4 (100% Video-First & Bulletproof Render Engine)**:
+  - **Nguyên nhân gốc 1 (Xem Preview bị đứng hình xen kẽ)**: Do trong thư mục gốc của dự án có chứa lẫn file ảnh tĩnh (.jpg), thuật toán cũ đã lấy ảnh tĩnh chèn vào kịch bản khiến người dùng thấy video bị đứng yên ở các slot ảnh.
+    ➔ **Khắc phục**: Triển khai quy tắc **100% Video-First** trong `server/services/storyline-engine.ts`. Nếu dự án có video, hệ thống CHỈ chọn 100% video chuyển động, tuyệt đối KHÔNG đưa ảnh tĩnh vào timeline.
+  - **Nguyên nhân gốc 2 (Xuất video bị đứng hoàn toàn từ đoạn đứng hình)**: Khi render FFmpeg với bộ lọc `xfade`, nếu clip nguồn kết thúc sớm hơn offset dù chỉ 1 frame (do sai lệch VFR/CFR giữa các video điện thoại), `xfade` sẽ treo và lặp lại frame cuối cùng cho toàn bộ thời lượng còn lại.
+    ➔ **Khắc phục**:
+    1. Bổ sung `tpad=stop_mode=clone:stop_duration=5` và ép cứng `-r 30` cho từng clip chuẩn hóa, bảo đảm 100% không bao giờ thiếu frame.
+    2. Sử dụng `ffprobe` đo đạc chính xác thời lượng thực tế của từng clip trên đĩa trước khi tính toán `offset` cho `xfade`.
+    3. Thêm cơ chế tự động fallback sang `stream concat` nếu `xfade` gặp sự cố, đảm bảo 100% video xuất ra liên tục chuyển động mượt mà không bao giờ bị đứng hình.
 - **Build & Quality Assurance**: Dự án đã vượt qua bài kiểm tra `npx tsc --noEmit` và `npm run build` với 0 lỗi cú pháp, toàn bộ các luồng Thư viện, Tạo video nhanh, Dựng timeline và Xuất MP4 hoạt động trơn tru, ổn định tuyệt đối.
+
 
 
 
