@@ -45,8 +45,17 @@ export const App: React.FC = () => {
       .then((res) => res.json())
       .then((data) => {
         if (data.success && data.data && data.data.clips && data.data.clips.length > 0) {
-          setTimelineData(data.data);
-          console.log('[App] Restored last active project:', data.data.projectName || data.voice?.fileName);
+          const project = data.data;
+          const voicePath = project.voicePath || data.voice?.filePath || '';
+          const voiceUrl = project.voiceUrl || (voicePath ? `/media/stream?path=${encodeURIComponent(voicePath)}` : '');
+          const duration = Number(project.duration) || Number(data.voice?.duration) || 0;
+          setTimelineData({
+            ...project,
+            voicePath,
+            voiceUrl,
+            duration,
+          });
+          console.log('[App] Restored last active project:', project.projectName || data.voice?.fileName);
         }
       })
       .catch((err) => console.warn('[App] Error restoring last project:', err));
@@ -73,6 +82,12 @@ export const App: React.FC = () => {
   const handleUpdateSubtitles = (newSubtitles: SubtitleLine[]) => {
     if (timelineData) {
       setTimelineData({ ...timelineData, subtitles: newSubtitles });
+    }
+  };
+
+  const handleUpdateVoice = (voiceInfo: { voicePath: string; voiceUrl: string; duration: number }) => {
+    if (timelineData) {
+      setTimelineData({ ...timelineData, ...voiceInfo });
     }
   };
 
@@ -104,6 +119,7 @@ export const App: React.FC = () => {
               timelineData={timelineData}
               onUpdateClips={handleUpdateClips}
               onUpdateSubtitles={handleUpdateSubtitles}
+              onUpdateVoice={handleUpdateVoice}
             />
           ) : (
             <div className="p-16 text-center max-w-md mx-auto">

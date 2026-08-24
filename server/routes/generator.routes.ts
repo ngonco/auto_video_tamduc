@@ -172,55 +172,78 @@ generatorRouter.post('/pick-media', async (req, res) => {
 });
 
 /**
- * Tự động kiểm tra và chữa lành các clip trong dự án timeline đã lưu
- * Nếu phát hiện clip trỏ tới file không còn tồn tại trên ổ cứng -> tự động tìm footage thay thế chuẩn từ SQLite
+ * Tự động kiểm tra và chữa lành toàn diện dự án timeline đã lưu:
+ * 1. Nếu phát hiện clip trỏ tới file không còn tồn tại trên ổ cứng -> tự động tìm footage thay thế chuẩn từ SQLite
+ * 2. Tự động kiểm tra & bù đắp voicePath, voiceUrl và duration chuẩn xác nếu bị thiếu hoặc undefined
  */
-function healSavedProjectClips(projectData: any, voiceId?: string): { projectData: any; healed: boolean } {
-  if (!projectData || !Array.isArray(projectData.clips) || projectData.clips.length === 0) {
+function healSavedProject(projectData: any, voiceRecord?: any): { projectData: any; healed: boolean } {
+  if (!projectData) {
     return { projectData, healed: false };
   }
 
   let healed = false;
   let allValidSources: any[] | null = null;
 
-  const validClips = projectData.clips.map((clip: any, idx: number) => {
-    if (!clip.filePath || !fs.existsSync(clip.filePath)) {
-      if (!allValidSources) {
-        allValidSources = db.prepare('SELECT * FROM video_sources').all().filter((s: any) => fs.existsSync(s.file_path));
-      }
-      if (allValidSources.length > 0) {
-        const stage = clip.stage || 'STAGE_2_ASSEMBLY_FINISHING';
-        const match = allValidSources.find((s: any) => s.stage === stage) || allValidSources[idx % allValidSources.length];
-        if (match) {
-          healed = true;
-          const isImg = Boolean(match.file_path.match(/\.(jpg|jpeg|png|webp|bmp)$/i));
-          return {
-            ...clip,
-            sourceId: match.id,
-            fileName: match.file_name,
-            filePath: match.file_path,
-            thumbnailPath: match.thumbnail_path || '',
-            aspectRatioType: match.aspect_ratio_type || '9:16',
-            mediaType: isImg ? 'image' : 'video',
-            sourceStart: 0,
-            sourceDuration: Number((clip.timelineEnd - clip.timelineStart).toFixed(2)),
-          };
+  // 1. Chữa lành clips nếu file không tồn tại
+  let validClips = projectData.clips;
+  if (Array.isArray(projectData.clips) && projectData.clips.length > 0) {
+    validClips = projectData.clips.map((clip: any, idx: number) => {
+      if (!clip.filePath || !fs.existsSync(clip.filePath)) {
+        if (!allValidSources) {
+          allValidSources = db.prepare('SELECT * FROM video_sources').all().filter((s: any) => fs.existsSync(s.file_path));
+        }
+        if (allValidSources.length > 0) {
+          const stage = clip.stage || 'STAGE_2_ASSEMBLY_FINISHING';
+          const match = allValidSources.find((s: any) => s.stage === stage) || allValidSources[idx % allValidSources.length];
+          if (match) {
+            healed = true;
+            const isImg = Boolean(match.file_path.match(/\.(jpg|jpeg|png|webp|bmp)$/i));
+            return {
+              ...clip,
+              sourceId: match.id,
+              fileName: match.file_name,
+              filePath: match.file_path,
+              thumbnailPath: match.thumbnail_path || '',
+              aspectRatioType: match.aspect_ratio_type || '9:16',
+              mediaType: isImg ? 'image' : 'video',
+              sourceStart: 0,
+              sourceDuration: Number((clip.timelineEnd - clip.timelineStart).toFixed(2)),
+            };
+          }
         }
       }
-    }
-    return clip;
-  });
+      return clip;
+    });
+  }
+
+  // 2. Chữa lành voicePath, voiceUrl và duration
+  const voicePath = projectData.voicePath || (voiceRecord ? voiceRecord.file_path : '');
+  const duration = Number(projectData.duration) || (voiceRecord ? Number(voiceRecord.duration) : 0);
+  let voiceUrl = projectData.voiceUrl;
+
+  if (!voiceUrl && voicePath) {
+    voiceUrl = `/media/stream?path=${encodeURIComponent(voicePath)}`;
+    healed = true;
+  }
+
+  if (projectData.voicePath !== voicePath || projectData.duration !== duration || projectData.voiceUrl !== voiceUrl) {
+    healed = true;
+  }
 
   const updatedData = {
     ...projectData,
+    voicePath,
+    voiceUrl,
+    duration,
     clips: validClips,
   };
 
-  if (healed && voiceId) {
+  const targetVoiceId = voiceRecord?.id || (typeof voiceRecord === 'string' ? voiceRecord : undefined);
+  if (healed && targetVoiceId) {
     try {
       db.prepare('UPDATE voices SET timeline_project_json = ? WHERE id = ?').run(
         JSON.stringify(updatedData),
-        voiceId
+        targetVoiceId
       );
     } catch (_) {}
   }
@@ -257,13 +280,15 @@ generatorRouter.get('/voices', (req, res) => {
         if (timelineProject.projectName) {
           timelineProject.projectName = fixUtf8Filename(timelineProject.projectName);
         }
-        const healedResult = healSavedProjectClips(timelineProject, v.id);
+        const healedResult = healSavedProject(timelineProject, v);
         timelineProject = healedResult.projectData;
       }
 
+      const fileExists = fs.existsSync(v.file_path);
       return {
         ...v,
         file_name: cleanFileName,
+        file_exists: fileExists,
         raw_words: rawWords,
         subtitles: subs,
         timeline_project: timelineProject,
@@ -611,9 +636,16 @@ generatorRouter.post('/save-project', (req, res) => {
     }
 
     const cleanProjectName = fixUtf8Filename(timelineData.projectName);
+    const targetVoicePath = voicePath || timelineData.voicePath;
+    const targetVoiceUrl = timelineData.voiceUrl || (targetVoicePath ? `/media/stream?path=${encodeURIComponent(targetVoicePath)}` : '');
+    const targetDuration = Number(timelineData.duration) || 0;
+
     const projectJson = JSON.stringify({
       ...timelineData,
       projectName: cleanProjectName,
+      voicePath: targetVoicePath,
+      voiceUrl: targetVoiceUrl,
+      duration: targetDuration,
       updatedAt: new Date().toISOString(),
     });
 
@@ -623,16 +655,15 @@ generatorRouter.post('/save-project', (req, res) => {
         SET timeline_project_json = ? 
         WHERE id = ?
       `).run(projectJson, voiceId);
-    } else {
+    } else if (targetVoicePath) {
       db.prepare(`
         UPDATE voices 
         SET timeline_project_json = ? 
         WHERE file_path = ?
-      `).run(projectJson, voicePath);
+      `).run(projectJson, targetVoicePath);
     }
 
     // Lưu vào system_settings key last_active_voice_path để khôi phục khi mở lại app
-    const targetVoicePath = voicePath || timelineData.voicePath;
     if (targetVoicePath) {
       db.prepare(`
         INSERT INTO system_settings (key, value, updated_at)
@@ -656,21 +687,31 @@ generatorRouter.post('/save-project', (req, res) => {
 generatorRouter.get('/last-project', (req, res) => {
   try {
     const setting: any = db.prepare(`SELECT value FROM system_settings WHERE key = 'last_active_voice_path'`).get();
-    if (!setting || !setting.value) {
-      return res.json({ success: false, message: 'Chưa có dự án gần nhất nào' });
+    let voiceRecord: any = null;
+    if (setting && setting.value) {
+      voiceRecord = db.prepare(`SELECT * FROM voices WHERE file_path = ?`).get(setting.value);
     }
 
-    const voiceRecord: any = db.prepare(`SELECT * FROM voices WHERE file_path = ?`).get(setting.value);
+    // Tự động tìm dự án Voice hợp lệ gần nhất nếu file đã lưu trước đó không tồn tại trên ổ đĩa
+    if (!voiceRecord || !fs.existsSync(voiceRecord.file_path) || !voiceRecord.timeline_project_json) {
+      const allVoices: any[] = db.prepare(`SELECT * FROM voices WHERE timeline_project_json IS NOT NULL ORDER BY created_at DESC`).all();
+      const existingVoice = allVoices.find((v) => fs.existsSync(v.file_path));
+      if (existingVoice) {
+        voiceRecord = existingVoice;
+      }
+    }
+
     if (!voiceRecord || !voiceRecord.timeline_project_json) {
       return res.json({ success: false, message: 'Không tìm thấy dữ liệu dự án đã lưu' });
     }
 
     let projectData = JSON.parse(voiceRecord.timeline_project_json);
     if (projectData) {
-      const healedResult = healSavedProjectClips(projectData, voiceRecord.id);
+      const healedResult = healSavedProject(projectData, voiceRecord);
       projectData = healedResult.projectData;
     }
 
+    const fileExists = voiceRecord ? fs.existsSync(voiceRecord.file_path) : false;
     res.json({
       success: true,
       data: projectData,
@@ -679,6 +720,7 @@ generatorRouter.get('/last-project', (req, res) => {
         fileName: voiceRecord.file_name,
         filePath: voiceRecord.file_path,
         duration: voiceRecord.duration,
+        fileExists,
       },
     });
   } catch (err: any) {
@@ -697,10 +739,11 @@ generatorRouter.get('/voice-project/:id', (req, res) => {
 
     let projectData = JSON.parse(voiceRecord.timeline_project_json);
     if (projectData) {
-      const healedResult = healSavedProjectClips(projectData, voiceRecord.id);
+      const healedResult = healSavedProject(projectData, voiceRecord);
       projectData = healedResult.projectData;
     }
 
+    const fileExists = voiceRecord ? fs.existsSync(voiceRecord.file_path) : false;
     res.json({
       success: true,
       data: projectData,
@@ -709,10 +752,81 @@ generatorRouter.get('/voice-project/:id', (req, res) => {
         fileName: voiceRecord.file_name,
         filePath: voiceRecord.file_path,
         duration: voiceRecord.duration,
+        fileExists,
       },
     });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.message });
   }
 });
+
+// 11. Đổi / Nạp lại file Voice cho dự án khi file cũ bị mất/đổi ổ đĩa
+generatorRouter.post('/relink-voice', async (req, res) => {
+  try {
+    const { voiceId, voicePath, newFilePath } = req.body;
+    const targetNewPath = newFilePath ? path.normalize(newFilePath) : '';
+    if (!targetNewPath || !fs.existsSync(targetNewPath)) {
+      return res.status(400).json({ success: false, error: 'File voice mới không tồn tại trên ổ đĩa' });
+    }
+
+    const meta = await getVideoMetadata(targetNewPath);
+    const fileName = fixUtf8Filename(path.basename(targetNewPath));
+    const voiceUrl = `/media/stream?path=${encodeURIComponent(targetNewPath)}`;
+
+    // Tìm bản ghi voice trong SQLite
+    let voice: any = null;
+    if (voiceId) {
+      voice = db.prepare('SELECT * FROM voices WHERE id = ?').get(voiceId);
+    }
+    if (!voice && voicePath) {
+      voice = db.prepare('SELECT * FROM voices WHERE file_path = ?').get(voicePath);
+    }
+    if (!voice) {
+      // Tìm theo last_active_voice_path
+      const setting: any = db.prepare(`SELECT value FROM system_settings WHERE key = 'last_active_voice_path'`).get();
+      if (setting && setting.value) {
+        voice = db.prepare('SELECT * FROM voices WHERE file_path = ?').get(setting.value);
+      }
+    }
+
+    if (voice) {
+      let proj: any = null;
+      try {
+        proj = JSON.parse(voice.timeline_project_json);
+      } catch (_) {}
+      if (proj) {
+        proj.voicePath = targetNewPath;
+        proj.voiceUrl = voiceUrl;
+        if (meta.duration && meta.duration > 0) {
+          proj.duration = meta.duration;
+        }
+      }
+      db.prepare(`
+        UPDATE voices 
+        SET file_path = ?, file_name = ?, duration = ?, timeline_project_json = ?
+        WHERE id = ?
+      `).run(targetNewPath, fileName, meta.duration || voice.duration, proj ? JSON.stringify(proj) : null, voice.id);
+    }
+
+    db.prepare(`
+      INSERT INTO system_settings (key, value, updated_at)
+      VALUES ('last_active_voice_path', ?, CURRENT_TIMESTAMP)
+      ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP
+    `).run(targetNewPath);
+
+    res.json({
+      success: true,
+      data: {
+        filePath: targetNewPath,
+        fileName,
+        voiceUrl,
+        duration: meta.duration,
+      },
+    });
+  } catch (err: any) {
+    console.error('[RelinkVoice] Error:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 

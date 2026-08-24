@@ -28,6 +28,8 @@ import {
   ChevronLeft,
   ChevronRight,
   X,
+  Volume2,
+  VolumeX,
 } from 'lucide-react';
 import {
   DndContext,
@@ -78,6 +80,7 @@ interface TimelineEditorProps {
   };
   onUpdateClips: (clips: TimelineClipItem[]) => void;
   onUpdateSubtitles: (subtitles: SubtitleLine[]) => void;
+  onUpdateVoice?: (voiceInfo: { voicePath: string; voiceUrl: string; duration: number }) => void;
 }
 
 const STAGE_COLORS: Record<string, string> = {
@@ -252,9 +255,11 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
   timelineData,
   onUpdateClips,
   onUpdateSubtitles,
+  onUpdateVoice,
 }) => {
   const playerRef = useRef<PlayerRef>(null);
   const timelineScrollRef = useRef<HTMLDivElement>(null);
+  const fileInputVoiceRef = useRef<HTMLInputElement | null>(null);
 
   // Player playback state
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
@@ -392,6 +397,122 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
   const autoSaveTimerRef = useRef<NodeJS.Timeout | null>(null);
   const isFirstMountRef = useRef(true);
 
+  // Tự động tính toán voiceUrl chuẩn xác
+  const resolvedVoiceUrl = useMemo(() => {
+    if (timelineData.voiceUrl && timelineData.voiceUrl.trim()) return timelineData.voiceUrl;
+    if (timelineData.voicePath && timelineData.voicePath.trim()) {
+      return `/media/stream?path=${encodeURIComponent(timelineData.voicePath)}`;
+    }
+    return undefined;
+  }, [timelineData.voiceUrl, timelineData.voicePath]);
+
+  // ── Tính năng nghe thử âm thanh Voice trực tiếp (Mở khóa âm thanh trình duyệt) ──
+  const [isTestingAudio, setIsTestingAudio] = useState(false);
+  const [voiceFileMissing, setVoiceFileMissing] = useState(false);
+  const audioTestRef = useRef<HTMLAudioElement | null>(null);
+
+  const handleTestAudioSnippet = useCallback(() => {
+    if (!resolvedVoiceUrl || !timelineData.voicePath) {
+      setVoiceFileMissing(true);
+      showToast('Không tìm thấy đường dẫn file voice!', 'error');
+      return;
+    }
+    try {
+      if (audioTestRef.current) {
+        audioTestRef.current.pause();
+        audioTestRef.current = null;
+      }
+      const a = new Audio(resolvedVoiceUrl);
+      a.volume = voiceVolume;
+      audioTestRef.current = a;
+      setIsTestingAudio(true);
+      a.play().then(() => {
+        setVoiceFileMissing(false);
+        setTimeout(() => {
+          if (audioTestRef.current) {
+            audioTestRef.current.pause();
+            audioTestRef.current = null;
+          }
+          setIsTestingAudio(false);
+        }, 3000);
+      }).catch((err) => {
+        console.warn('[TestAudio] Play error:', err);
+        setIsTestingAudio(false);
+        setVoiceFileMissing(true);
+        showToast('⚠️ Không tìm thấy file âm thanh Voice trên máy! Vui lòng bấm [Đổi Voice] để chọn lại file trên máy.', 'error');
+      });
+    } catch (e: any) {
+      setIsTestingAudio(false);
+      setVoiceFileMissing(true);
+      showToast('Lỗi: ' + e.message, 'error');
+    }
+  }, [resolvedVoiceUrl, timelineData.voicePath, voiceVolume, showToast]);
+
+  // ── Đổi / Nạp lại file Voice trên máy ──
+  const applyNewVoiceFile = useCallback(async (newFilePath: string) => {
+    try {
+      showToast('Đang liên kết lại file Voice...', 'info');
+      const res = await fetch('/api/generator/relink-voice', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          voiceId: timelineData.projectId,
+          voicePath: timelineData.voicePath,
+          newFilePath,
+        }),
+      });
+      const data = await res.json();
+      if (data.success && data.data) {
+        setVoiceFileMissing(false);
+        onUpdateVoice?.({
+          voicePath: data.data.filePath,
+          voiceUrl: data.data.voiceUrl,
+          duration: data.data.duration || timelineData.duration,
+        });
+        showToast('✅ Đã cập nhật file Voice thành công! Âm thanh đã sẵn sàng.', 'success');
+      } else {
+        showToast(data.error || 'Lỗi liên kết file voice', 'error');
+      }
+    } catch (err: any) {
+      showToast('Lỗi: ' + err.message, 'error');
+    }
+  }, [timelineData.projectId, timelineData.voicePath, timelineData.duration, onUpdateVoice, showToast]);
+
+  const handleChangeVoiceFile = useCallback(async () => {
+    try {
+      const res = await fetch('/api/generator/pick-voice', { method: 'POST' });
+      const data = await res.json();
+      if (data.success && data.file?.filePath) {
+        await applyNewVoiceFile(data.file.filePath);
+        return;
+      }
+      if (data.cancelled) return;
+    } catch (_) {}
+    fileInputVoiceRef.current?.click();
+  }, [applyNewVoiceFile]);
+
+  const handleUploadVoiceFileFallback = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const formData = new FormData();
+    formData.append('voice', file);
+    try {
+      showToast('Đang nạp file voice từ trình duyệt...', 'info');
+      const res = await fetch('/api/generator/upload-voice', {
+        method: 'POST',
+        body: formData,
+      });
+      const data = await res.json();
+      if (data.success && data.file?.filePath) {
+        await applyNewVoiceFile(data.file.filePath);
+      } else {
+        showToast(data.error || 'Lỗi tải file', 'error');
+      }
+    } catch (err: any) {
+      showToast('Lỗi: ' + err.message, 'error');
+    }
+  }, [applyNewVoiceFile, showToast]);
+
   // Hàm thực thi lưu toàn bộ dự án vào CSDL SQLite
   const executeSaveProject = useCallback(async (isManual = false) => {
     if (!timelineData.voicePath) return;
@@ -401,8 +522,8 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
         projectId: timelineData.projectId,
         projectName: timelineData.projectName,
         voicePath: timelineData.voicePath,
-        voiceUrl: timelineData.voiceUrl,
-        duration: timelineData.duration,
+        voiceUrl: resolvedVoiceUrl,
+        duration: voiceDuration,
         subtitles: timelineData.subtitles,
         clips: timelineData.clips,
         availableSources: localAvailableSources,
@@ -593,7 +714,18 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
   };
 
   const fps = 30;
-  const voiceDuration = timelineData.duration;
+  // Tính toán voiceDuration an toàn tuyệt đối: timelineData.duration -> clip max end -> 30s
+  const voiceDuration = useMemo(() => {
+    if (timelineData.duration && !isNaN(Number(timelineData.duration)) && Number(timelineData.duration) > 0) {
+      return Number(timelineData.duration);
+    }
+    if (timelineData.clips && timelineData.clips.length > 0) {
+      const maxEnd = Math.max(...timelineData.clips.map((c) => c.timelineEnd || 0));
+      if (maxEnd > 0) return Number(maxEnd.toFixed(2));
+    }
+    return 30.0;
+  }, [timelineData.duration, timelineData.clips]);
+
   const isOutroActive = outroEnabled && Boolean(outroPath) && outroDuration > 0;
   const totalDuration = voiceDuration + (isOutroActive ? outroDuration : 0);
   const durationInFrames = Math.max(30, Math.ceil(totalDuration * fps));
@@ -646,6 +778,12 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
       playerRef.current.pause();
       setIsPlaying(false);
     } else {
+      try {
+        if (playerRef.current.isMuted()) {
+          playerRef.current.unmute();
+        }
+        playerRef.current.setVolume(1.0);
+      } catch (_) {}
       playerRef.current.play();
       setIsPlaying(true);
     }
@@ -1717,7 +1855,7 @@ sourceDuration: Number(outroDuration.toFixed(2)),
       height: 1920,
       clips: allClipsWithOutro,
       subtitles: timelineData.subtitles,
-      voiceUrl: timelineData.voiceUrl,
+      voiceUrl: resolvedVoiceUrl,
       bgmUrl: selectedBgm ? `/media/bgm/${selectedBgm.split(/[\\/]/).pop()}` : undefined,
       voiceVolume,
       bgmVolume,
@@ -1736,7 +1874,7 @@ sourceDuration: Number(outroDuration.toFixed(2)),
       fps,
       allClipsWithOutro,
       timelineData.subtitles,
-      timelineData.voiceUrl,
+      resolvedVoiceUrl,
       selectedBgm,
       voiceVolume,
       bgmVolume,
@@ -2072,6 +2210,18 @@ sourceDuration: Number(outroDuration.toFixed(2)),
                   <p className="text-[11px] text-slate-400 mt-1">
                     Thời lượng: <strong className="font-mono text-amber-300">{totalDuration.toFixed(1)}s</strong> • {timelineData.clips.length} clips
                   </p>
+                  <div className="mt-2 pt-2 border-t border-slate-800/80 flex items-center justify-between">
+                    <div className="truncate text-[10px] font-mono text-slate-400" title={timelineData.voicePath}>
+                      🎙️ {timelineData.voicePath ? (timelineData.voicePath.split('\\').pop()?.split('/').pop() || 'Voice Audio') : 'Chưa có file'}
+                    </div>
+                    <button
+                      onClick={handleChangeVoiceFile}
+                      className="px-2 py-0.5 bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 rounded text-[10px] font-bold transition cursor-pointer shrink-0 ml-2"
+                      title="Chọn lại file Voice từ máy tính nếu file bị đổi vị trí hoặc thiếu"
+                    >
+                      📁 Đổi Voice
+                    </button>
+                  </div>
                 </div>
 
                 <div className="space-y-1.5 pt-2 border-t border-slate-800">
@@ -2217,8 +2367,8 @@ sourceDuration: Number(outroDuration.toFixed(2)),
         >
           {/* Timeline Toolbar (3 Khối Cân Đối) */}
           <div className="h-10 px-4 bg-slate-900/95 border-b border-slate-800 flex items-center justify-between text-xs text-slate-400 flex-shrink-0">
-            {/* Khối Trái: Play/Pause & Timecode */}
-            <div className="flex items-center gap-3 font-mono text-[11px]">
+            {/* Khối Trái: Play/Pause & Timecode & Test Audio */}
+            <div className="flex items-center gap-2 font-mono text-[11px]">
               <button
                 onClick={togglePlayPause}
                 className={`flex items-center gap-1.5 px-3 py-1 rounded-lg text-[11px] font-bold shadow transition cursor-pointer ${
@@ -2237,7 +2387,38 @@ sourceDuration: Number(outroDuration.toFixed(2)),
                 <span className="text-[9px] font-mono opacity-80">(Space)</span>
               </button>
 
-              <span className="text-amber-400 font-bold">TIMELINE 9:16</span>
+              <button
+                onClick={handleTestAudioSnippet}
+                className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-[10px] font-bold border transition cursor-pointer ${
+                  isTestingAudio
+                    ? 'bg-amber-500/20 text-amber-300 border-amber-500/40 animate-pulse'
+                    : 'bg-slate-800 hover:bg-slate-700 text-slate-300 border-slate-700'
+                }`}
+                title="Bấm để nghe thử 3 giây giọng Voice và mở khóa âm thanh trình duyệt"
+              >
+                <Volume2 className="w-3.5 h-3.5 text-amber-400" />
+                <span>{isTestingAudio ? '🔊 Đang phát...' : '🎧 Test Voice'}</span>
+              </button>
+
+              <button
+                onClick={handleChangeVoiceFile}
+                className="flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-bold bg-slate-800 hover:bg-slate-700 text-amber-300 border border-slate-700 transition cursor-pointer"
+                title="Chọn lại file Voice trên máy tính"
+              >
+                <FolderOpen className="w-3 h-3 text-amber-400" />
+                <span>Đổi Voice</span>
+              </button>
+
+              {/* Hidden file input fallback */}
+              <input
+                type="file"
+                ref={fileInputVoiceRef}
+                onChange={handleUploadVoiceFileFallback}
+                accept="audio/*"
+                className="hidden"
+              />
+
+              <span className="text-amber-400 font-bold ml-1">TIMELINE 9:16</span>
               <span className="text-slate-200 font-bold">
                 {formatTime(playheadTimeSec)} / {formatTime(totalDuration)}
               </span>
@@ -2626,6 +2807,11 @@ sourceDuration: Number(outroDuration.toFixed(2)),
           height: '100%',
         }}
         controls
+        showVolumeControls
+        initiallyMuted={false}
+        initialVolume={1.0}
+        clickToPlay
+        spaceKeyToPlayOrPause={false}
         autoPlay={false}
         loop
       />

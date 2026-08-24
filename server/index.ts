@@ -86,6 +86,9 @@ app.get('/media/stream', (req, res) => {
   if (ext === '.mp3') contentType = 'audio/mpeg';
   else if (ext === '.wav') contentType = 'audio/wav';
   else if (ext === '.m4a') contentType = 'audio/mp4';
+  else if (ext === '.aac') contentType = 'audio/aac';
+  else if (ext === '.ogg') contentType = 'audio/ogg';
+  else if (ext === '.flac') contentType = 'audio/flac';
   else if (ext === '.mov') contentType = 'video/quicktime';
   else if (ext === '.mkv') contentType = 'video/x-matroska';
   else if (ext === '.webm') contentType = 'video/webm';

@@ -44,6 +44,7 @@ interface SavedVoiceItem {
   id: string;
   file_name: string;
   file_path: string;
+  file_exists?: boolean;
   duration: number;
   stt_text: string;
   raw_words: any[];
@@ -398,12 +399,15 @@ export const GeneratorWizard: React.FC<GeneratorWizardProps> = ({
       return;
     }
 
-    const voiceUrl = `/media/stream?path=${encodeURIComponent(saved.file_path)}`;
+    const voicePath = saved.file_path || saved.timeline_project.voicePath;
+    const voiceUrl = `/media/stream?path=${encodeURIComponent(voicePath)}`;
+    const duration = Number(saved.timeline_project.duration) || Number(saved.duration) || 0;
+
     onStorylineGenerated({
       ...saved.timeline_project,
-      voicePath: saved.file_path,
+      voicePath,
       voiceUrl,
-      duration: saved.duration,
+      duration,
       subtitles: saved.timeline_project.subtitles || saved.subtitles || [],
     });
   };
@@ -648,10 +652,15 @@ export const GeneratorWizard: React.FC<GeneratorWizardProps> = ({
                           </div>
                           <div className="truncate">
                             <p className="font-bold truncate text-[11px] text-slate-100">{v.file_name}</p>
-                            <p className="text-[10px] text-slate-400 flex items-center gap-2 mt-0.5">
+                            <p className="text-[10px] text-slate-400 flex items-center gap-2 mt-0.5 flex-wrap">
                               <span className="font-mono text-amber-400/90">{v.duration.toFixed(1)}s</span>
                               <span>•</span>
                               <span>{v.subtitles?.length || 0} dòng sub</span>
+                              {v.file_exists === false && (
+                                <span className="text-[9px] text-red-400 bg-red-500/15 px-1.5 py-0.2 rounded border border-red-500/30 font-semibold">
+                                  ⚠️ File bị thiếu
+                                </span>
+                              )}
                             </p>
                           </div>
                         </div>

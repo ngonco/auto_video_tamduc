@@ -16,46 +16,47 @@ export const AudioLayer: React.FC<AudioLayerProps> = React.memo(({
   bgmVolume = 0.15,
   voiceDuration,
 }) => {
-  const frame = useCurrentFrame();
   const { fps } = useVideoConfig();
 
-  // Nếu có voiceDuration, tính toán Fade-out cho BGM ở 1.0s trước khi hết Voice
-  let currentBgmVolume = bgmVolume;
-  if (voiceDuration && voiceDuration > 1.0) {
-    const fadeStartFrame = Math.round((voiceDuration - 1.0) * fps);
-    const fadeEndFrame = Math.round(voiceDuration * fps);
-    currentBgmVolume = interpolate(
-      frame,
-      [fadeStartFrame, fadeEndFrame],
-      [bgmVolume, 0],
-      { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' }
-    );
-  }
-
-  const voiceDurationFrames = voiceDuration ? Math.ceil(voiceDuration * fps) : undefined;
+  const safeVoiceDuration = (voiceDuration && !isNaN(Number(voiceDuration)) && Number(voiceDuration) > 0) ? Number(voiceDuration) : undefined;
+  const voiceDurationFrames = safeVoiceDuration ? Math.ceil(safeVoiceDuration * fps) : undefined;
+  const safeVoiceVolume = (!isNaN(Number(voiceVolume)) && Number(voiceVolume) >= 0) ? Number(voiceVolume) : 1.0;
+  const safeBgmVolume = (!isNaN(Number(bgmVolume)) && Number(bgmVolume) >= 0) ? Number(bgmVolume) : 0.15;
 
   return (
     <>
       {voiceUrl && (
-        <Sequence from={0} durationInFrames={voiceDurationFrames} layout="none">
-          <Audio
-            key={voiceUrl}
-            src={voiceUrl}
-            volume={voiceVolume}
-            onError={(err) => console.warn('[AudioLayer] Voice audio error:', voiceUrl, err)}
-          />
-        </Sequence>
+        <Audio
+          key={`voice_${voiceUrl}`}
+          src={voiceUrl}
+          volume={() => safeVoiceVolume}
+          startFrom={0}
+          endAt={voiceDurationFrames}
+          crossOrigin="anonymous"
+          onError={(err) => console.warn('[AudioLayer] Voice audio error:', voiceUrl, err)}
+        />
       )}
       {bgmUrl && (
-        <Sequence from={0} durationInFrames={voiceDurationFrames} layout="none">
-          <Audio
-            key={bgmUrl}
-            src={bgmUrl}
-            volume={currentBgmVolume}
-            loop
-            onError={(err) => console.warn('[AudioLayer] BGM audio error:', bgmUrl, err)}
-          />
-        </Sequence>
+        <Audio
+          key={`bgm_${bgmUrl}`}
+          src={bgmUrl}
+          volume={(f) => {
+            if (safeVoiceDuration && safeVoiceDuration > 1.0) {
+              const fadeStartFrame = Math.round((safeVoiceDuration - 1.0) * fps);
+              const fadeEndFrame = Math.round(safeVoiceDuration * fps);
+              return interpolate(
+                f,
+                [fadeStartFrame, fadeEndFrame],
+                [safeBgmVolume, 0],
+                { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' }
+              );
+            }
+            return safeBgmVolume;
+          }}
+          loop
+          crossOrigin="anonymous"
+          onError={(err) => console.warn('[AudioLayer] BGM audio error:', bgmUrl, err)}
+        />
       )}
     </>
   );

@@ -501,7 +501,27 @@ Hệ thống đã tạo sẵn bộ công cụ sao lưu tự động toàn bộ m
     + Nút `[⚡ XUẤT VIDEO (MP4 1080x1920)]` ghim nổi bật ở Header tác vụ trên cùng bên trái.
   - **Cột Trái - Tầng Dưới: Timeline Tracks Cao Ráo (`h-[340px]`)**:
     + Không gian rộng rãi, thoáng mắt cho Ruler, Video track và Subtitle track.
+- **Khắc Phục Toàn Diện Lỗi Video Preview Không Có Tiếng Voice (Audio Preview Fix & Safe Audio Layer Engine)**:
+  - **Nguyên nhân gốc rễ**:
+    1. **Bản ghi dự án trong SQLite bị thiếu `voiceUrl` và `duration` (`undefined`)**: Khi lưu dự án timeline vào CSDL SQLite (`voices.timeline_project_json`), trường `voiceUrl` và `duration` trước đây có thể bị lưu là `undefined`. Khi khôi phục dự án (`GET /api/generator/last-project` hoặc `GET /api/generator/voice-project/:id`), `timelineData.voiceUrl` trả về `undefined`.
+    2. **Frontend `TimelineEditor.tsx` thiếu fallback sinh `voiceUrl`**: Giao diện truyền trực tiếp `timelineData.voiceUrl` vào `compositionProps`. Khi `timelineData.voiceUrl` bị thiếu, `compositionProps.voiceUrl` nhận giá trị `undefined`, khiến thẻ `<Audio>` của Remotion không được render. Ngoài ra, khi `timelineData.duration` là `undefined`, `totalDuration` và `durationInFrames` bị tính thành `NaN`, làm treo luồng phát âm thanh.
+    3. **File Voice dự án gần nhất trên ổ đĩa ngoài (USB/ổ đĩa khác) bị ngắt kết nối**: `last_active_voice_path` trỏ tới file không còn tồn tại trên máy khiến backend trả về 404 cho stream audio.
+  - **Giải pháp xử lý triệt để**:
+    1. **Nâng cấp Backend Auto-Heal Dự Án & Re-link Voice ([server/routes/generator.routes.ts](file:///d:/DONG%20GOI%20TAM%20THOI/Auto_Video_TamDuc/server/routes/generator.routes.ts))**:
+       - Triển khai hàm `healSavedProject()`: Tự động kiểm tra và bù đắp chuẩn xác 100% `voicePath`, `voiceUrl` (`/media/stream?path=...`) và `duration` cho mọi dự án timeline trong SQLite (`/voices`, `/last-project`, `/voice-project/:id`).
+       - Bổ sung cờ `file_exists` kiểm tra sự tồn tại thực tế của file âm thanh trên đĩa cứng cho mọi endpoint (`/voices`, `/last-project`, `/voice-project/:id`).
+       - Triển khai endpoint `POST /api/generator/relink-voice`: Cho phép người dùng chọn lại đường dẫn file voice mới trên máy tính khi file cũ bị mất/đổi ổ đĩa, tự động đồng bộ lại CSDL SQLite và cập nhật timeline.
+       - Mở rộng MIME types cho streaming backend ([server/index.ts](file:///d:/DONG%20GOI%20TAM%20THOI/Auto_Video_TamDuc/server/index.ts)) hỗ trợ đầy đủ `.mp3`, `.wav`, `.m4a`, `.aac`, `.ogg`, `.flac`.
+    2. **Tối ưu Remotion Layer & Player Preview ([src/remotion/layers/AudioLayer.tsx](file:///d:/DONG%20GOI%20TAM%20THOI/Auto_Video_TamDuc/src/remotion/layers/AudioLayer.tsx) & [TimelineEditor.tsx](file:///d:/DONG%20GOI%20TAM%20THOI/Auto_Video_TamDuc/src/components/EditorView/TimelineEditor.tsx))**:
+       - Sử dụng thẻ `<Audio>` trực tiếp với `volume={(f) => ...}`, `startFrom={0}`, `endAt={voiceDurationFrames}` (loại bỏ bọc Sequence gián tiếp gây lệch sync).
+       - Thêm nút **`🎧 Test Voice` (Phát thử 3s & Mở khóa âm thanh)** và nút **`📁 Đổi Voice`** ngay trên thanh công cụ Timeline và trong bảng Cài đặt dự án để người dùng dễ dàng kiểm tra hoặc chọn lại file Voice trực tiếp từ Windows Explorer.
+       - Tính toán `resolvedVoiceUrl` an toàn tuyệt đối từ `timelineData.voiceUrl` hoặc tự động encode từ `timelineData.voicePath`.
+       - Tính toán an toàn `voiceDuration` với fallback sang `clip max end` hoặc `30s` chống `NaN`/`undefined`.
+       - Thêm `crossOrigin="anonymous"` cho các thẻ `<Audio>` trong `AudioLayer.tsx`.
+       - Kích hoạt `showVolumeControls`, `clickToPlay`, `initiallyMuted={false}`, `initialVolume={1.0}` và tự động gọi `playerRef.current.unmute()` + `setVolume(1.0)` khi phát trên Remotion `<Player>`.
+       - Đảm bảo `App.tsx` và `GeneratorWizard.tsx` luôn truyền đầy đủ `voiceUrl`, `voicePath`, `duration`, đồng thời hiển thị cảnh báo trực quan nếu file voice trong lịch sử bị thiếu trên ổ đĩa.
 - **Build & Quality Assurance**: Dự án đã vượt qua bài kiểm tra `npx tsc --noEmit` và `npm run build` với 0 lỗi cú pháp, toàn bộ các luồng Thư viện, Tạo video nhanh, Dựng timeline và Xuất MP4 hoạt động trơn tru, ổn định tuyệt đối.
+
 
 
 
