@@ -285,10 +285,35 @@ generatorRouter.get('/voices', (req, res) => {
       }
 
       const fileExists = fs.existsSync(v.file_path);
+
+      // Kiểm tra trạng thái đã xuất video dựa trên bảng generated_videos và file thực tế trên ổ đĩa
+      let isExported = false;
+      let exportInfo: { id: string; output_path: string; created_at: string } | undefined = undefined;
+      try {
+        const latestExport: any = db.prepare(`
+          SELECT id, output_path, created_at, status 
+          FROM generated_videos 
+          WHERE voice_path = ? AND status = 'completed'
+          ORDER BY created_at DESC 
+          LIMIT 1
+        `).get(v.file_path);
+
+        if (latestExport && latestExport.output_path && fs.existsSync(latestExport.output_path)) {
+          isExported = true;
+          exportInfo = {
+            id: latestExport.id,
+            output_path: latestExport.output_path,
+            created_at: latestExport.created_at,
+          };
+        }
+      } catch (_) {}
+
       return {
         ...v,
         file_name: cleanFileName,
         file_exists: fileExists,
+        is_exported: isExported,
+        export_info: exportInfo,
         raw_words: rawWords,
         subtitles: subs,
         timeline_project: timelineProject,

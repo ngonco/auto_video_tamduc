@@ -110,6 +110,30 @@ renderRouter.get('/status/:jobId', (req, res) => {
   res.json({ success: true, data: job });
 });
 
+// Tải trực tiếp file video xuất ra về máy tính (hoặc lưu file)
+renderRouter.get('/download', (req, res) => {
+  try {
+    const rawPath = req.query.path as string;
+    if (!rawPath) {
+      return res.status(400).json({ success: false, error: 'Thiếu đường dẫn file' });
+    }
+
+    const resolved = path.resolve(rawPath);
+    if (!fs.existsSync(resolved)) {
+      return res.status(404).json({ success: false, error: 'Không tìm thấy file trên đĩa' });
+    }
+
+    const fileName = path.basename(resolved);
+    res.download(resolved, fileName, (err) => {
+      if (err) {
+        console.warn('[RenderRouter] Download error:', err);
+      }
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 // Mở thư mục chứa video xuất ra trên Windows Explorer (và highlight file video vừa xuất)
 renderRouter.post('/open-folder', (req, res) => {
   try {

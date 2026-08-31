@@ -60,7 +60,12 @@ async function checkHasAudio(filePath: string): Promise<boolean> {
 }
 
 /**
- * Sinh file phụ đề Advanced SubStation Alpha (.ass) hỗ trợ Karaoke và viền đổ bóng sắc nét không lỗi font
+ * Sinh file phụ đề Advanced SubStation Alpha (.ass) hỗ trợ Karaoke và viền đổ bóng sắc nét không lỗi font.
+ * QUY TẮC ĐỒNG BỘ 1:1 CỠ CHỮ & ĐỘ DÀY (PIXEL MATCHING RATIO):
+ * - CSS Pixels trong Remotion Player chạy ở chuẩn 96 DPI.
+ * - ASS font size (libass FreeType) chạy theo hệ đơn vị Point (72 DPI).
+ * - Hệ số quy đổi chuẩn xác: calibratedFontSize = Math.round(fontSize * (96 / 72)) = Math.round(fontSize * 1.3333).
+ * - Sử dụng "Be Vietnam Pro ExtraBold" để khớp trọn vẹn với fontWeight: 800 của Preview, đảm bảo chữ to, nét, dày dặn, không bị bé/lép khi xuất video.
  */
 export function generateAssKaraokeSubtitleFile(
   subtitles: SubtitleLine[],
@@ -69,8 +74,18 @@ export function generateAssKaraokeSubtitleFile(
   fontSize: number = 65,
   bottomPercent: number = 22
 ) {
+  // Chuẩn hóa hệ số quy đổi 96 DPI CSS px -> 72 DPI ASS pt (tỉ lệ 1.3333)
+  const calibratedFontSize = Math.round((fontSize || 65) * (96 / 72));
+
+  // Nạp font ExtraBold (weight 800) đồng bộ với Remotion Preview fontWeight: 800
+  let assFontName = fontFamily;
+  if (!fontFamily || fontFamily === 'Be Vietnam Pro') {
+    assFontName = 'Be Vietnam Pro ExtraBold';
+  }
+
   const marginV = Math.round(1920 * (bottomPercent / 100));
-  const outlineWidth = Math.max(3, Math.round(fontSize * 0.07 * 10) / 10);
+  // Viền chữ sắc nét tỉ lệ theo kích thước font
+  const outlineWidth = Math.max(3.5, Math.round(calibratedFontSize * 0.055 * 10) / 10);
 
   let assContent = `[Script Info]
 Title: Auto Video Tam Duc Karaoke
@@ -83,7 +98,7 @@ PlayResY: 1920
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Karaoke,${fontFamily},${fontSize},&H0000D7FF,&H00FFFFFF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,${outlineWidth},2,2,40,40,${marginV},1
+Style: Karaoke,${assFontName},${calibratedFontSize},&H0000D7FF,&H00FFFFFF,&H00000000,&H90000000,0,0,0,0,100,100,1,0,1,${outlineWidth},2.5,2,40,40,${marginV},1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
