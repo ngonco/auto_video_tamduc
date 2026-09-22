@@ -139,9 +139,39 @@ Tổng thời lượng Video = Thời lượng Voice chính xác (T giây từ f
         + **Kích thước & Vị trí chuẩn**: Mặc định cỡ chữ 65px (quy đổi ASS thành 87pt), căn lề đáy 22% (~422px từ đáy 1080x1920) chuẩn safe zone 9:16.
         + **Tùy chỉnh trực quan & Ghi nhớ vĩnh viễn (Timeline Subtitle Controls)**: Bộ thanh trượt điều chỉnh Cỡ chữ (40px - 90px) và Vị trí lề đáy (12% - 35%) ngay trên Bảng điều khiển Timeline Editor; cập nhật trực tiếp thời gian thực trên Preview và tự động lưu vào localStorage / render payload để video xuất ra khớp tuyệt đối 1:1.
         + **Xử lý khoảng lặng**: Tự động chèn thẻ {\k<gap>} trong file ASS để khớp tuyệt đối từng nhịp ngắt nghỉ của giọng Voice.
-  3. Storyline & Clip Duration Engine (Chuẩn 4.0s - 5.5s & 2 Chế Độ Lắp Ráp Nguồn):
+      - **Tầng 7 (Cơ Chế Phòng Thủ STT & Chế Độ Video Nhạc Nền - Music / Non-Vocal Safe Mode & Graceful Degradation)**:
+        + **Đo thời lượng độc lập bằng ffprobe**: Luôn lấy thời lượng audio chính xác 100% trước hoặc độc lập với STT.
+        + **Phòng thủ STT Upstream**: Khi gặp file nhạc thuần túy, nhạc thiền không lời hoặc Upstream Gateway trả về HTTP 400/500, hệ thống không throw ngoại lệ làm ngắt luồng mà tự động gán `isMusic: true`, trả về `subtitles: []` và bỏ qua bước gọi LLM sửa ngữ cảnh.
+        + **Giao diện Trực quan & Bỏ chặn Lắp ráp**: Giao diện hiển thị banner tím dịu mắt `🎵 Chế Độ Video Nhạc Nền`, nút `⚡ TỰ ĐỘNG LẮP RÁP VIDEO 9:16` luôn sẵn sàng bấm ngay (không bắt buộc phải có phụ đề).
+        + **Tự động Tắt BGM Phụ (Anti-Clash Audio)**: Mặc định gán `selectedBgm: ''` (None) khi dựng từ file nhạc để tránh 2 bài nhạc phát đè lên nhau gây ồn; bản nhạc chính phát tròn trịa ở âm lượng 100%.
+        + **Tùy Chọn Bật/Tắt Tự Động Tạo Phụ Đề (Auto STT Toggle Checkbox)**:
+          * Checkbox trực quan ngay tại Unified Voice Dropzone ở Bước 1 của Wizard: `[x] Tự động tạo phụ đề (AI STT Whisper + Gemini)`.
+          * Mặc định: BẬT (`checked: true`), tự động lưu tùy chọn của người dùng vào `localStorage` (`auto_video_auto_stt_enabled`).
+          * Khi TẮT (`skipStt: true`): Hệ thống bỏ qua gọi Whisper STT và Gemini AI spell-check, chỉ đo thời lượng audio bằng `ffprobe` trong ~0.2s, ghi nhớ vào database và chuyển thẳng sang trạng thái sẵn sàng cho Chế độ Nhạc nền hoặc Dán phụ đề thủ công.
+        + **Thuật Toán Ngắt Dòng Phụ Đề Thủ Công / Thơ Ca / Lời Bài Hát (1:1 Newline & Proportional Word-Timing)**:
+          * **Bảo toàn 100% dòng ngắt (`\n`)**: Mỗi dòng xuống hàng bằng phím Enter tương ứng chính xác với 1 khối phụ đề (`SubtitleLine`), tuyệt đối không xé vụn các câu thơ/câu hát 10-12 từ thành nhiều phân đoạn nhỏ.
+          * **Phân bổ thời gian theo tỷ lệ số từ (Proportional Timing)**: Tính tốc độ phát âm chuẩn `secPerWord = validDuration / totalWords`; thời lượng của dòng thứ `i` bằng `wordsInLine * secPerWord`. Các câu hát dài (9-12 từ) hiển thị lâu hơn các câu ngắn (4-5 từ), bảo đảm nhịp điệu tự nhiên mượt mà.
+          * **Tự động xuống 2 hàng cân đối cho câu dài (Balanced 2-Row Visual Wrap)**: Khi một dòng có > 6 từ hoặc > 28 ký tự, hệ thống tự động bẻ đôi tại vị trí chính giữa (`midIndex = Math.ceil(words.length / 2)`), chia thành 2 dòng căn giữa cân xứng cả trên Remotion Player (`flexBasis: '100%', height: 0`) lẫn file ASS Karaoke (`\N`), giữ nguyên cỡ chữ 65px sắc nét mà không bao giờ bị tràn lề 1080x1920 hay ngắt lẻ 1 từ cộc lốc.
+        + **Hỗ trợ Dán Lời & Soạn Thảo Phụ Đề Thủ Công Đa Năng (Manual Subtitle Engine)**:
+          * **Modal Soạn Thảo Nổi (Popup Dialog - [ManualSubtitleModal.tsx](file:///d:/DONG%20GOI%20TAM%20THOI/Auto_Video_TamDuc/src/components/GeneratorView/ManualSubtitleModal.tsx))**: Tích hợp trực tiếp tại Bước 1 của Wizard với 2 chế độ:
+            - *Chế độ 1 (Dán Nhanh Lời Bài Hát)*: Textarea dán lời, thanh trượt / ô số `[Bắt đầu hát (s)]` và `[Kết thúc hát (s)]` (tự động giữ nguyên đoạn intro và outro nhạc), thuật toán `/api/generator/resegment-transcript` tự chia dòng 9:16 và phân bổ đều mốc thời gian.
+            - *Chế độ 2 (Bảng Từng Câu [Start - End - Text])*: Bảng danh sách trực quan có nút nghe thử đoạn nhạc ▶, steppers tăng giảm `-0.5s`, `+0.5s`, nút thêm câu tiếp theo và xóa câu.
+          * **Công Cụ Thêm & Tinh Chỉnh Phụ Đề Trên Timeline Editor ([TimelineEditor.tsx](file:///d:/DONG%20GOI%20TAM%20THOI/Auto_Video_TamDuc/src/components/EditorView/TimelineEditor.tsx))**:
+            - Nút `[➕ Thêm]` trên Header Subtitle track: 1-click tạo ngay câu phụ đề mới tại vị trí vạch Playhead hiện tại.
+            - Tay kéo 2 đầu (Left Handle xanh lá / Right Handle hổ phách) trên từng khối phụ đề để kéo co giãn `start` / `end` mượt mà bằng chuột kèm floating tooltip thời gian thực.
+            - Kéo rê (Move drag) khối phụ đề để di chuyển vị trí dọc theo timeline.
+            - Tab `[💬 Chỉnh Phụ Đề]` (3-Column Subtitle Inspector) ở tầng trên: Cột 1 (Thông tin & Nút phát thử trên Remotion Player), Cột 2 (Steppers số lẻ Start/End), Cột 3 (Sửa văn bản, Nối câu tiếp theo, Xóa câu).
+          * **Karaoke Tự Động Chia Nhịp**: Tự động nội suy chia đều thời gian cho các từ trong câu hát, giúp hiệu ứng Karaoke đổi màu vàng kim `#FFD700` chạy mượt mà trên Preview và khớp 100% khi render MP4 bằng FFmpeg. Cơ chế phòng thủ trong `KaraokeLayer.tsx` tự động bù đắp `words` chống crash khi phụ đề thêm thủ công.
+        + **Tối Ưu Hóa Render**: Render Engine tự động bỏ qua filter `subtitles=...` của FFmpeg khi `subtitles.length === 0`, tăng tốc độ xuất video và tránh mọi lỗi libass khi không có phụ đề.
+  3. Storyline & Clip Duration Engine (Chuẩn 4.0s - 5.5s, 2 Mẫu Ghép Kịch Bản & 2 Chế Độ Lắp Ráp Nguồn):
+     - **2 Mẫu Ghép Thứ Tự Video (Dual Storyline Patterns)**:
+       + **Mẫu 1 (Chuẩn 4 Giai Đoạn - Standard 4 Stages)**: Phân bổ tịnh tiến theo tỷ lệ thời lượng Voice chuẩn: Thô (0-20%) ➔ Lắp ráp hoàn thiện (20-50%) ➔ Cắm hoa trang trí (50-75%) ➔ Đèn hào quang & Lễ Phật (75-100%).
+       + **Mẫu 2 (Tùy Chọn Chủ Đề / Giai Đoạn - Custom Stages Pattern)**: Cho phép người dùng tick chọn tự do 1 hoặc nhiều giai đoạn mong muốn:
+         * Ghép nối tiếp theo đúng trình tự tiến trình tự nhiên của các giai đoạn đã chọn (chia đều thời lượng cho N giai đoạn).
+         * Nếu chỉ chọn 1 giai đoạn (ví dụ chỉ Lễ Phật): 100% thời lượng video là các góc quay của giai đoạn đó.
+         * Cơ chế bù trừ footage: Nếu số lượng clip trong các giai đoạn được chọn không đủ phủ kín thời lượng Voice, hệ thống tự động **xoay vòng lặp lại các clip trong chính các giai đoạn được chọn theo thứ tự ít dùng nhất (`usage_count` thấp nhất)** và trượt `sourceStart` nếu file gốc còn dài, tuyệt đối không lấy clip của các giai đoạn không được tick chọn.
      - **2 Chế độ chọn Source**:
-       + **Chế độ 1 (1 Công trình cụ thể - Single Mode)**: Phân bổ clip 4 giai đoạn từ 1 thư mục công trình được chọn.
+       + **Chế độ 1 (1 Công trình cụ thể - Single Mode)**: Phân bổ clip từ 1 thư mục công trình được chọn.
        + **Chế độ 2 (Toàn bộ thư viện - All Projects Smart Mix Mode)**: Tự động tổng hợp và chọn lọc footage tối ưu từ tất cả các công trình trong database.
      - **Thuật toán chống trùng lặp vừa phải & Usage Memory**:
        + Ưu tiên Video trước, chỉ bổ sung Ảnh tĩnh (kèm Ken Burns) khi thiếu video ở giai đoạn tương ứng.
@@ -262,7 +292,9 @@ CREATE TABLE voices (
 | Method | Endpoint | Tham Số (Body/Query) | Mô Tả |
 | :--- | :--- | :--- | :--- |
 | `GET` | `/api/library/projects` | - | Lấy danh sách tất cả các công trình và tổng số video |
-| `GET` | `/api/library/projects/:id/videos` | - | Lấy danh sách clip chi tiết của 1 công trình |
+| `GET` | `/api/library/projects/:id/videos` | - | Lấy danh sách clip chi tiết của 1 công trình (sắp xếp usage_count ASC, aesthetic_score DESC) |
+| `GET` | `/api/library/sources` | `?projectId=...` | Lấy danh sách tất cả footage trong thư viện (kèm usageCount, lastUsedAt, sắp xếp ít dùng nhất lên đầu) |
+| `POST` | `/api/library/increment-source-usage` | `{ sourceId?: string, filePath?: string }` | Tăng số lần dùng (+1) và cập nhật `last_used_at` trong SQLite khi chọn clip thay thế |
 | `POST` | `/api/library/pick-and-import` | `{ initialPath?: string }` | Mở hộp thoại chọn thư mục công trình Windows & tự động phân tích AI |
 | `POST` | `/api/library/import-path` | `{ folderPath: string }` | Nhập thư mục công trình từ đường dẫn & tự động phân tích AI |
 | `POST` | `/api/library/projects/:id/scan` | - | Kích hoạt quét và nhúng AI chạy nền cho 1 công trình (xử lý song song 4 luồng) |
@@ -280,8 +312,8 @@ CREATE TABLE voices (
 | `POST` | `/api/generator/upload-voice` | FormData (`file`) | Tải lên file Voice (.mp3, .wav, .m4a) qua web |
 | `POST` | `/api/generator/process-voice` | `{ filePath, duration, forceRefresh? }` | Nhận diện STT Whisper + Gemini sửa phụ đề Phật học, lọc sạch ảo giác & tự động lưu lịch sử |
 | `POST` | `/api/generator/update-subtitles` | `{ voicePath, subtitles, fullTranscript? }` | Cập nhật và lưu tức thì danh sách phụ đề vào bảng voices SQLite (khi sửa/xóa/gộp dòng) |
-| `POST` | `/api/generator/resegment-transcript` | `{ voicePath, customText, duration? }` | Phân bổ lại toàn bộ phụ đề từ văn bản tùy chỉnh (Bulk Transcript Editor) |
-| `POST` | `/api/generator/assemble-storyline`| `{ targetDuration, mode?: 'single' \| 'all', projectId?, outro? }` | Tự động phân bổ clip 4 giai đoạn theo chế độ 1 công trình hoặc toàn bộ thư viện (kèm chống trùng lặp vừa phải & Usage Memory) |
+| `POST` | `/api/generator/resegment-transcript` | `{ voicePath, customText, duration?, startOffset?, endOffset? }` | Phân bổ lại toàn bộ phụ đề từ văn bản tùy chỉnh (hỗ trợ dải thời gian intro/outro cho bài nhạc) |
+| `POST` | `/api/generator/assemble-storyline`| `{ targetDuration, mode?: 'single' \| 'all', projectId?, pattern?: 'standard_4_stages' \| 'custom_stages', selectedStages?: string[], outro? }` | Tự động phân bổ clip theo 2 Mẫu kịch bản: Mẫu 1 (Chuẩn 4 giai đoạn) hoặc Mẫu 2 (Tùy chọn 1 hoặc nhiều giai đoạn, lặp lại clip ít dùng nhất khi thiếu) |
 | `GET` | `/api/generator/library-summary` | - | Lấy thống kê tổng quan thư viện (tổng số công trình, clips, thời lượng) |
 | `GET` | `/api/generator/bgm-list` | - | Lấy danh sách nhạc thiền BGM |
 | `POST` | `/api/render/start` | `{ videoId, projectName, voicePath, clips, subtitles, subtitleFontSize?, subtitleBottomPercent?, outroPath, outroEnabled, outroDuration }` | Bắt đầu Render video MP4 1080x1920 qua FFmpeg (kèm đồng bộ size phụ đề ASS & Outro unmuted audio & BGM fade-out) |
@@ -342,8 +374,8 @@ Auto_Video_TamDuc/
 │   ├── components/
 │   │   ├── Navbar.tsx
 │   │   ├── LibraryView/        # Thư viện công trình
-│   │   ├── GeneratorView/      # Wizard tạo video 1-Click
-│   │   ├── EditorView/         # Trình dựng Timeline, Remotion Player 9:16 & Xóa Source Gốc
+│   │   ├── GeneratorView/      # Wizard tạo video 1-Click & ManualSubtitleModal (Soạn thảo phụ đề thủ công)
+│   │   ├── EditorView/         # Trình dựng Timeline (3-Column Subtitle Inspector & kéo thả phụ đề), Remotion Player 9:16
 │   │   └── SettingsView/       # Cài đặt hệ thống
 │   └── remotion/               # Composition Remotion 9:16
 │       ├── Root.tsx
@@ -371,7 +403,12 @@ Auto_Video_TamDuc/
    ```
 2. **Khởi động qua file `.exe`**:
    - Nhấp đúp vào `Auto_Video_TamDuc.exe` (hoặc ghim vào Taskbar Windows).
-3. **Địa chỉ truy cập**:
+   - Launcher C# ngầm tự chạy `npm run dev` và mở trình duyệt tại `http://localhost:5173/`.
+   - Có biểu tượng Tray Icon ở góc phải màn hình để mở lại giao diện hoặc thoát nhanh.
+3. **Đóng gói lại File `.exe` & Build Production**:
+   - Biên dịch lại file launcher `.exe`: `npm run build:exe` (tự động giải phóng tiến trình cũ đang chạy và sử dụng .NET Framework `csc.exe` biên dịch `Launcher.cs` thành `Auto_Video_TamDuc.exe`).
+   - Đóng gói toàn diện (Frontend Vite + Launcher .exe): `npm run build:all`.
+4. **Địa chỉ truy cập**:
    - Giao diện: `http://localhost:5173/`
    - Backend API: `http://localhost:3001/`
 
@@ -586,7 +623,61 @@ Hệ thống đã tạo sẵn bộ công cụ sao lưu tự động toàn bộ m
     3. **Chọn Nhanh Toàn Bộ Video Theo Từng Ngày**: Bổ sung nút `[Chọn ngày (N)]` trên từng Header ngày, giúp 1-click chọn tất cả các video đã có timeline của riêng ngày đó để phục vụ xuất hàng loạt.
   - **Kiểm thử tự động Browser Subagent**: Đã mô phỏng thao tác người dùng thực tế trên trình duyệt `http://localhost:5173`: test thu gọn/mở rộng, test chọn nhanh theo ngày, test xem video modal và kiểm tra xuất hàng loạt đạt chuẩn 100%.
 
-- **Build & Quality Assurance**: Dự án đã vượt qua bài kiểm tra `npx tsc --noEmit` và `npm run build` với 0 lỗi cú pháp, toàn bộ các luồng Thư viện, Tạo video nhanh, Dựng timeline và Xuất MP4 hoạt động trơn tru, ổn định tuyệt đối.
+- **Tự Động Ưu Tiên Video Ít Dùng Lên Đầu Khi Đổi Công Trình (Least-Used First Footage Sorting Engine)**:
+  - **Mục tiêu**: Đảm bảo kho tư liệu công trình phong phú luôn được xoay vòng công bằng, tránh tình trạng một số video bị lặp đi lặp lại nhiều lần trong khi các video đẹp khác không bao giờ được chạm tới.
+  - **Tự Động Lọc Theo Giai Đoạn (Auto-Tab Selection)**: Khi người dùng bấm nút "Đổi Công Trình" trên Timeline Editor cho một clip, modal tự động chọn tab Giai đoạn (`stage`) tương ứng của clip đó (Giai đoạn 1: Thi công thô, Giai đoạn 2: Lắp ráp hoàn thiện, Giai đoạn 3: Cắm hoa trang trí, Giai đoạn 4: Đèn hào quang & Lễ Phật).
+  - **Thuật Toán Sắp Xếp Ưu Tiên 3 Tầng**:
+    1. **Video trước, Ảnh tĩnh sau**: `mediaType === 'video'` luôn xếp trước `mediaType === 'image'`, đảm bảo các cảnh quay động chất lượng cao được ưu tiên hiển thị trước.
+    2. **Số lần dùng ít nhất lên đầu (ASC)**: `usageCount` từ 0 lần -> 1 lần -> 2 lần... Những video chưa từng được sử dụng lần nào trong bất kỳ dự án nào luôn nằm ngay trên hàng đầu tiên.
+    3. **Điểm thẩm mỹ cao hơn xếp trước (DESC)**: Khi có cùng số lần dùng (ví dụ cùng 0 lần), hệ thống ưu tiên các video có `aestheticScore` cao hơn lên trước.
+  - **Cập Nhật Tức Thì Usage Counter (Instant Memory & SQLite Sync)**:
+    + Ngay khi người dùng nhấn chọn một clip trong modal để thay thế vào timeline:
+      * UI tự động tăng `usageCount` (+1) trong state `localAvailableSources` ngay lập tức.
+      * Gửi API ngầm `POST /api/library/increment-source-usage` để ghi nhận vĩnh viễn `usage_count = usage_count + 1` và `last_used_at = CURRENT_TIMESTAMP` vào bảng `video_sources` trong SQLite.
+      * Các footage chưa dùng khác sẽ tiếp tục tự động leo lên đầu cho các lần đổi clip tiếp theo.
+- **Bộ Chọn Mẫu Kịch Bản Ghép Video (Dual Storyline Pattern Engine)**:
+  - **Mục tiêu**: Cung cấp cho người dùng 2 mẫu dựng kịch bản linh hoạt: hoặc bám sát theo quy trình 4 giai đoạn chuẩn của xưởng bàn thờ, hoặc tự do chọn 1 hay nhiều chủ đề/giai đoạn trọng tâm theo yêu cầu của bài nói.
+  - **Mẫu 1 (Chuẩn 4 Giai Đoạn - Standard 4 Stages)**:
+    + Thô (0% - 20%) ➔ Lắp ráp hoàn thiện (20% - 50%) ➔ Cắm hoa trang trí (50% - 75%) ➔ Đèn hào quang & Lễ Phật (75% - 100%).
+  - **Mẫu 2 (Tùy Chọn Chủ Đề / Giai Đoạn - Custom Stages Pattern)**:
+    + Cho phép tick chọn tự do 1, 2, 3 hoặc 4 giai đoạn bằng các thẻ bấm trực quan (Badge Checkbox).
+    + Thuật toán chia đều dải thời lượng cho N giai đoạn được chọn và ghép nối tiếp theo đúng trình tự tiến trình tự nhiên (Stage 1 ➔ Stage 2 ➔ Stage 3 ➔ Stage 4).
+    + **Cơ chế lặp lại ít dùng nhất khi thiếu video**: Khi số lượng footage trong các giai đoạn được chọn không đủ dài để phủ hết thời lượng Voice, hệ thống tự động xoay vòng lặp lại các clip trong chính các giai đoạn được chọn theo thứ tự ưu tiên ít dùng nhất (`usage_count` thấp nhất) và trượt `sourceStart` nếu file dài > 5s; tuyệt đối không lấy clip của các giai đoạn không được tick chọn.
+    + Áp dụng nhất quán cho cả 2 chế độ: Toàn bộ thư viện (Smart Mix) lẫn 1 Công trình cụ thể.
+
+- **Tự Động Đồng Bộ & Xóa Sạch Folder / File Mồ Côi Khi Bị Xóa Ngoài Ổ Cứng (Real-Time Watcher & Self-Healing Purge Engine)**:
+  - **Mục tiêu**: Khắc phục triệt để tình trạng "ghi nhớ ảo" khi người dùng xóa thư mục công trình hoặc file video ngoài ổ cứng Windows (ví dụ như folder `hoa` đã bị xóa ngoài ổ đĩa nhưng hệ thống vẫn còn lưu bản ghi).
+  - **Dọn Sạch Triệt Để Dữ Liệu Cũ**: Đã quét và thanh lọc vĩnh viễn toàn bộ 32 thư mục công trình không còn tồn tại trên đĩa (gồm folder `hoa` với 18 video và 31 thư mục số rác) cùng toàn bộ thumbnail cache liên quan khỏi CSDL SQLite.
+  - **Cơ Chế Đồng Bộ 2 Tầng Hoàn Hảo**:
+    1. **Tầng 1 (Real-Time Watcher - [server/watcher.ts](file:///d:/DONG%20GOI%20TAM%20THOI/Auto_Video_TamDuc/server/watcher.ts))**: Bổ sung lắng nghe sự kiện `unlinkDir` (xóa thư mục) và `unlink` (xóa file media) của Chokidar. Ngay khi phát hiện thư mục bị xóa ngoài ổ cứng, hệ thống lập tức xóa sạch project và các video liên quan trong CSDL SQLite trong vòng 1-2 giây.
+    2. **Tầng 2 (Self-Healing on Startup & on Query - [server/routes/library.routes.ts](file:///d:/DONG%20GOI%20TAM%20THOI/Auto_Video_TamDuc/server/routes/library.routes.ts))**: Tích hợp hàm `purgeMissingProjectsAndSources()` tự động đối chiếu `fs.existsSync(p.folder_path)` ngay khi server khởi động và mỗi khi truy vấn danh sách công trình `GET /api/library/projects`. Đảm bảo ngay cả khi người dùng xóa folder lúc ứng dụng đang tắt, khi bật lại app hệ thống vẫn tự động dọn sạch 100%.
+    3. **Dọn dẹp Thumbnail Cache**: Cập nhật endpoint `DELETE /api/library/projects/:id` để tự động xóa sạch file ảnh thumbnail vật lý trong `.cache/thumbnails/` khi xóa công trình trên giao diện.
+
+- **Thêm Phụ Đề Thủ Công Cho Nhạc & Bộ Soạn Thảo Phụ Đề Trực Quan Đa Tầng (Manual Subtitle Engine & Interactive Subtitle Editor)**:
+  - **Mục tiêu**: Hỗ trợ toàn diện tình huống người dùng nạp file nhạc bài hát hoặc bản thu âm không thể bóc tách phụ đề tự động bằng STT (STT Whisper trả về rỗng hoặc nhạc không lời), cho phép người dùng dễ dàng dán lời bài hát hoặc tự tạo phụ đề từng câu với mốc thời gian tùy biến.
+  - **Tầng 1 - Modal Nổi Soạn Thảo Phụ Đề Tại Bước 1 ([ManualSubtitleModal.tsx](file:///d:/DONG%20GOI%20TAM%20THOI/Auto_Video_TamDuc/src/components/GeneratorView/ManualSubtitleModal.tsx))**:
+    + Cửa sổ Popup dialog nổi rộng rãi, tông màu tối sang trọng với 2 tab chuyển đổi:
+      * *Tab 1 (Dán Nhanh Lời Bài Hát)*: Textarea dán toàn bộ lời bài hát kèm 2 ô số/slider tùy chỉnh `[Bắt đầu hát (giây)]` và `[Kết thúc hát (giây)]`. Thuật toán `/api/generator/resegment-transcript` tự động chia dòng 9:16 và phân bổ đều các câu trong dải thời gian này, bảo toàn tuyệt đối đoạn nhạc dạo đầu (intro) và đoạn kết (outro).
+      * *Tab 2 (Bảng Từng Câu [Start - End - Text])*: Bảng danh sách các câu với ô nhập số giây bắt đầu/kết thúc, steppers `-0.5s`, `+0.5s`, nút ▶ nghe thử đoạn nhạc tương ứng qua HTTP range stream, nút thêm câu mới tự động nối tiếp thời gian của câu trước, và nút xóa câu.
+    + Nút `💾 Áp Dụng Phụ Đề Vào Video`: Tự động tính toán mảng `KaraokeWord[]` cho từng từ, lưu tức thì vào CSDL SQLite `voices` (`subtitles_json` & `stt_text`), tự động tắt cờ `isMusicMode` để sẵn sàng dựng video có phụ đề.
+  - **Tầng 2 - Công Cụ Thêm & Tinh Chỉnh Phụ Đề Trực Quan Trên Timeline Editor ([TimelineEditor.tsx](file:///d:/DONG%20GOI%20TAM%20THOI/Auto_Video_TamDuc/src/components/EditorView/TimelineEditor.tsx))**:
+    + **Nút `[➕ Thêm]` trên Header Subtitle Track**: 1-click tạo ngay câu phụ đề mới (~3.5s) tại đúng vị trí vạch Playhead hiện tại (`currentFrame / fps`).
+    + **Tay Kéo 2 Đầu & Kéo Rê Trên Track**:
+      * *Tay kéo trái (Left Handle xanh lá)*: Co giãn thời điểm `start` câu bằng chuột.
+      * *Tay kéo phải (Right Handle hổ phách)*: Co giãn thời điểm `end` câu bằng chuột.
+      * *Kéo rê giữa*: Di chuyển toàn bộ khối câu phụ đề dọc theo timeline.
+      * *Floating Tooltip*: Hiển thị mốc thời gian thực tế `[Start ➔ End] (N.Ns)` khi đang kéo.
+    + **Bảng Thuộc Tính Phụ Đề 3 Cột (3-Column Subtitle Inspector)**:
+      * Tự động xuất hiện ở tầng trên khi click chọn bất kỳ câu phụ đề nào trên track:
+      * *Cột 1*: Số thứ tự câu `#{i+1}`, thời lượng, số từ, và nút `▶ Phát Thử Câu Này Trên Player` (tự động tua Remotion Player tới đúng khung hình và phát thử với âm lượng chuẩn).
+      * *Cột 2*: Bộ steppers số lẻ Start/End `-0.5s`, `+0.5s` và ô nhập số trực tiếp.
+      * *Cột 3*: Textarea sửa nội dung lời câu hát, nút `🗑️ Xóa Câu`, nút `➕ Nối Câu`, nút `✕ Đóng`.
+  - **Tầng 3 - Phòng Thủ & Đồng Bộ Karaoke Toàn Diện**:
+    + Tự động chia đều thời lượng cho các từ trong câu hát để hiệu ứng Karaoke đổi màu vàng kim `#FFD700` chuyển động mượt mà từng từ theo nhịp câu hát.
+    + Cơ chế phòng thủ trong `KaraokeLayer.tsx`: Khi `activeLine.words` bị rỗng hoặc thiếu, hệ thống tự động sinh `resolvedWords` từ `activeLine.text`, loại bỏ hoàn toàn nguy cơ crash màn hình Remotion Preview.
+    + Khi Render FFmpeg: File ASS karaoke tự động chèn các thẻ `{\k...}` khớp chính xác với mốc thời gian từng câu hát.
+
+- **Build & Quality Assurance**: Dự án đã vượt qua bài kiểm tra `npx tsc --noEmit`, `npm run build` và `npm run build:exe` với 0 lỗi cú pháp, toàn bộ các luồng Thư viện, Tạo video nhanh, Dựng timeline và Xuất MP4 hoạt động trơn tru, ổn định tuyệt đối.
 
 
 

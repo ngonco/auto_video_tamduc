@@ -40,6 +40,7 @@ import {
   ChevronRight
 } from 'lucide-react';
 import { SubtitleLine } from '../../remotion/types.js';
+import { ManualSubtitleModal } from './ManualSubtitleModal.js';
 
 interface ProjectItem {
   id: string;
@@ -115,6 +116,31 @@ export const GeneratorWizard: React.FC<GeneratorWizardProps> = ({
     stageStats?: any[];
   } | null>(null);
 
+  // Mẫu kịch bản ghép video (Mẫu 1: Chuẩn 4 giai đoạn, Mẫu 2: Tùy chọn 1 hoặc nhiều giai đoạn)
+  const [storylinePattern, setStorylinePattern] = useState<'standard_4_stages' | 'custom_stages'>('standard_4_stages');
+  const [selectedCustomStages, setSelectedCustomStages] = useState<string[]>([
+    'STAGE_3_DECOR_FLOWERS',
+    'STAGE_4_WORSHIP_ALTAR',
+  ]);
+
+  const handleToggleStage = (st: string) => {
+    setSelectedCustomStages((prev) => {
+      if (prev.includes(st)) {
+        if (prev.length <= 1) return prev; // Giữ ít nhất 1 stage
+        return prev.filter((s) => s !== st);
+      } else {
+        const ALL = [
+          'STAGE_1_RAW_CARPENTRY',
+          'STAGE_2_ASSEMBLY_FINISHING',
+          'STAGE_3_DECOR_FLOWERS',
+          'STAGE_4_WORSHIP_ALTAR',
+        ];
+        const next = [...prev, st];
+        return ALL.filter((s) => next.includes(s));
+      }
+    });
+  };
+
   // Saved voices history
   const [savedVoices, setSavedVoices] = useState<SavedVoiceItem[]>([]);
   const [loadingVoices, setLoadingVoices] = useState(false);
@@ -142,9 +168,15 @@ export const GeneratorWizard: React.FC<GeneratorWizardProps> = ({
   const [isDraggingVoice, setIsDraggingVoice] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // STT Auto toggle state (mặc định bật, lưu localStorage)
+  const [autoSttEnabled, setAutoSttEnabled] = useState<boolean>(() => {
+    return localStorage.getItem('auto_video_auto_stt_enabled') !== 'false';
+  });
+
   // STT & Subtitle states
   const [processingSTT, setProcessingSTT] = useState(false);
   const [subtitles, setSubtitles] = useState<SubtitleLine[]>([]);
+  const [isMusicMode, setIsMusicMode] = useState<boolean>(false);
   const [fullTranscript, setFullTranscript] = useState<string>('');
   const [bulkTranscript, setBulkTranscript] = useState<string>('');
   const [subViewMode, setSubViewMode] = useState<'lines' | 'bulk'>('lines');
@@ -152,6 +184,7 @@ export const GeneratorWizard: React.FC<GeneratorWizardProps> = ({
   const [editingSubText, setEditingSubText] = useState<string>('');
   const [savingSubs, setSavingSubs] = useState(false);
   const [resegmenting, setResegmenting] = useState(false);
+  const [showManualSubModal, setShowManualSubModal] = useState<boolean>(false);
 
   // Storyline assembly
   const [assembling, setAssembling] = useState(false);
@@ -274,8 +307,15 @@ export const GeneratorWizard: React.FC<GeneratorWizardProps> = ({
   };
 
   // 3. Xử lý STT & Subtitle
-  const processVoiceFile = async (filePathToProcess: string, fileName?: string, forceRefresh = false) => {
+  const processVoiceFile = async (
+    filePathToProcess: string,
+    fileName?: string,
+    forceRefresh = false,
+    skipSttOverride?: boolean
+  ) => {
     if (!filePathToProcess) return;
+
+    const shouldSkipStt = skipSttOverride !== undefined ? skipSttOverride : !autoSttEnabled;
 
     try {
       setProcessingSTT(true);
@@ -287,15 +327,17 @@ export const GeneratorWizard: React.FC<GeneratorWizardProps> = ({
           filePath: filePathToProcess,
           originalName: fileName || voiceName,
           forceRefresh,
+          skipStt: shouldSkipStt,
         }),
       });
 
       const data = await res.json();
       if (data.success) {
-        setFullTranscript(data.data.rawText);
-        setBulkTranscript(data.data.rawText);
+        setFullTranscript(data.data.rawText || '');
+        setBulkTranscript(data.data.rawText || '');
         setVoiceDuration(data.data.duration);
-        setSubtitles(data.data.subtitles);
+        setSubtitles(data.data.subtitles || []);
+        setIsMusicMode(Boolean(data.isMusicMode || (!data.data.rawText && (!data.data.subtitles || data.data.subtitles.length === 0))));
         fetchSavedVoices(); // Cập nhật lại lịch sử voice
       } else {
         setErrorMsg(data.error || 'Lỗi xử lý nhận diện giọng nói');
@@ -410,6 +452,7 @@ export const GeneratorWizard: React.FC<GeneratorWizardProps> = ({
       if (data.success) {
         setSubtitles(data.data.subtitles);
         setFullTranscript(data.data.fullTranscript);
+        setIsMusicMode(false);
         setSubViewMode('lines');
         fetchSavedVoices();
       } else {
@@ -422,6 +465,19 @@ export const GeneratorWizard: React.FC<GeneratorWizardProps> = ({
     }
   };
 
+  // Áp dụng phụ đề từ Modal Soạn Thảo Thủ Công (ManualSubtitleModal)
+  const handleApplyManualSubtitles = async (newSubs: SubtitleLine[], transcript: string) => {
+    setSubtitles(newSubs);
+    setFullTranscript(transcript);
+    setBulkTranscript(transcript);
+    if (newSubs.length > 0) {
+      setIsMusicMode(false);
+      setSubViewMode('lines');
+    }
+    await autoSaveSubtitles(newSubs, transcript);
+    fetchSavedVoices();
+  };
+
   // 4. Chọn Voice từ Lịch sử Đã Nạp
   const handleSelectSavedVoice = (saved: SavedVoiceItem) => {
     setVoiceName(saved.file_name);
@@ -430,6 +486,7 @@ export const GeneratorWizard: React.FC<GeneratorWizardProps> = ({
     setFullTranscript(saved.stt_text || '');
     setBulkTranscript(saved.stt_text || (saved.subtitles || []).map((s) => s.text).join(' '));
     setSubtitles(saved.subtitles || []);
+    setIsMusicMode(!saved.stt_text?.trim() && (!saved.subtitles || saved.subtitles.length === 0));
     setErrorMsg('');
   };
 
@@ -837,8 +894,8 @@ export const GeneratorWizard: React.FC<GeneratorWizardProps> = ({
       setErrorMsg('Vui lòng chọn 1 Folder công trình hoặc chuyển sang chế độ Tự Động Tổng Hợp');
       return;
     }
-    if (subtitles.length === 0 || voiceDuration === 0 || !voicePath) {
-      setErrorMsg('Vui lòng nạp Voice và hoàn tất nhận diện phụ đề trước khi lắp ráp');
+    if (!voicePath || voiceDuration === 0) {
+      setErrorMsg('Vui lòng nạp file âm thanh hợp lệ trước khi lắp ráp');
       return;
     }
 
@@ -853,6 +910,8 @@ export const GeneratorWizard: React.FC<GeneratorWizardProps> = ({
           mode: sourceMode,
           projectId: sourceMode === 'single' ? selectedProjectId : undefined,
           targetDuration: voiceDuration,
+          pattern: storylinePattern,
+          selectedStages: storylinePattern === 'custom_stages' ? selectedCustomStages : undefined,
         }),
       });
 
@@ -872,10 +931,11 @@ export const GeneratorWizard: React.FC<GeneratorWizardProps> = ({
           voicePath,
           voiceUrl,
           duration: voiceDuration,
-          subtitles,
+          subtitles: subtitles || [],
           clips: data.data.clips,
           availableSources: data.data.availableSources || [],
           outro: data.data.outro || null,
+          bgm: (isMusicMode || !subtitles || subtitles.length === 0) ? { selectedBgm: '' } : undefined,
         };
 
         // Tự động lưu dự án ban đầu vào CSDL SQLite
@@ -1019,6 +1079,33 @@ export const GeneratorWizard: React.FC<GeneratorWizardProps> = ({
                 <Upload className="w-3.5 h-3.5 text-slate-400" />
                 <span>Tải Từ Trình Duyệt</span>
               </button>
+            </div>
+
+            {/* Tùy chọn Tự động tạo phụ đề (STT Whisper + Gemini AI) */}
+            <div
+              className="mt-2.5 pt-2 border-t border-slate-800/80 w-full max-w-sm flex items-center justify-center gap-2"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <label className="flex items-center gap-2 cursor-pointer select-none group">
+                <input
+                  type="checkbox"
+                  checked={autoSttEnabled}
+                  onChange={(e) => {
+                    const val = e.target.checked;
+                    setAutoSttEnabled(val);
+                    localStorage.setItem('auto_video_auto_stt_enabled', String(val));
+                  }}
+                  className="w-4 h-4 rounded text-amber-500 bg-slate-800 border-slate-700 focus:ring-amber-500 focus:ring-offset-slate-900 cursor-pointer accent-amber-500"
+                />
+                <span className="text-xs font-semibold text-slate-300 group-hover:text-amber-300 transition-colors">
+                  Tự động tạo phụ đề (AI STT Whisper + Gemini)
+                </span>
+              </label>
+              {!autoSttEnabled && (
+                <span className="text-[10px] text-amber-400 bg-amber-500/15 px-1.5 py-0.5 rounded border border-amber-500/30 font-medium">
+                  Nhạc / Dán thủ công
+                </span>
+              )}
             </div>
           </div>
 
@@ -1386,7 +1473,7 @@ export const GeneratorWizard: React.FC<GeneratorWizardProps> = ({
 
               {(!subtitles.length || subtitles.length === 0) && (
                 <button
-                  onClick={() => processVoiceFile(voicePath, voiceName)}
+                  onClick={() => processVoiceFile(voicePath, voiceName, true, false)}
                   disabled={processingSTT}
                   className="flex items-center gap-2 px-4 py-2 bg-amber-500 hover:bg-amber-600 text-slate-950 rounded-lg text-xs font-bold transition disabled:opacity-50 flex-shrink-0"
                 >
@@ -1406,72 +1493,122 @@ export const GeneratorWizard: React.FC<GeneratorWizardProps> = ({
             </div>
           )}
 
-          {/* Hiển Thị Subtitle Đã Xử Lý */}
-          {subtitles.length > 0 && (
+          {/* Banner Chế Độ Video Nhạc Nền (khi không có phụ đề) */}
+          {voicePath && voiceDuration > 0 && subtitles.length === 0 && subViewMode !== 'bulk' && !processingSTT && (
+            <div className="mt-4 p-4 bg-gradient-to-r from-purple-950/40 via-slate-900/90 to-amber-950/30 rounded-xl border border-purple-500/30 text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3 animate-in fade-in duration-200">
+              <div className="space-y-1">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="px-2.5 py-0.5 rounded-full bg-purple-500/20 text-purple-300 font-bold border border-purple-500/40 text-[11px] flex items-center gap-1.5 font-montserrat">
+                    <Music className="w-3.5 h-3.5 text-purple-400 animate-pulse" />
+                    Chế Độ Video Nhạc Nền ({voiceDuration.toFixed(1)}s)
+                  </span>
+                  <span className="text-[10px] text-slate-400 font-mono">
+                    ✓ Đã tối ưu âm lượng • Tự động tắt BGM phụ
+                  </span>
+                </div>
+                <p className="text-slate-300 text-xs">
+                  File âm thanh là bản nhạc hoặc không có lời đọc. Hệ thống đã sẵn sàng để bạn dựng video với âm nhạc này!
+                </p>
+              </div>
+
+              <div className="flex items-center gap-2 flex-shrink-0">
+                <button
+                  type="button"
+                  onClick={() => setShowManualSubModal(true)}
+                  className="flex items-center gap-1.5 px-3.5 py-2 bg-gradient-to-r from-amber-500 to-yellow-500 hover:from-amber-600 hover:to-yellow-600 text-slate-950 rounded-xl text-xs font-bold transition shadow-md shadow-amber-500/20"
+                >
+                  <Plus className="w-4 h-4 stroke-[3]" />
+                  Thêm Lời / Phụ Đề Thủ Công
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Hiển Thị Subtitle Đã Xử Lý HOẶC Soạn Thảo Phụ Đề Thủ Công */}
+          {(subtitles.length > 0 || (subViewMode === 'bulk' && voicePath)) && (
             <div className="mt-4 p-4 bg-slate-900/90 rounded-xl border border-amber-500/20 text-xs">
               {/* Header thanh công cụ Subtitles */}
               <div className="flex flex-wrap items-center justify-between gap-3 mb-3 pb-3 border-b border-slate-800">
                 <div className="flex items-center gap-2 flex-wrap">
                   <span className="font-bold text-amber-300 flex items-center gap-1.5 font-montserrat">
                     <FileText className="w-4 h-4 text-amber-400" />
-                    Phụ Đề ({subtitles.length} dòng • {voiceDuration.toFixed(1)}s):
+                    {subtitles.length > 0
+                      ? `Phụ Đề (${subtitles.length} dòng • ${voiceDuration.toFixed(1)}s):`
+                      : `Thêm Lời / Phụ Đề Thủ Công (${voiceDuration.toFixed(1)}s):`}
                   </span>
-                  <span className="text-[10px] bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-2 py-0.5 rounded-full font-mono flex items-center gap-1">
-                    <ShieldCheck className="w-3 h-3 text-emerald-400" />
-                    AI Cleaned & Spell-Checked
-                  </span>
+                  {subtitles.length > 0 && (
+                    <span className="text-[10px] bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-2 py-0.5 rounded-full font-mono flex items-center gap-1">
+                      <ShieldCheck className="w-3 h-3 text-emerald-400" />
+                      AI Cleaned & Spell-Checked
+                    </span>
+                  )}
                   <span className="text-[10px] text-slate-400 font-mono">
                     {savingSubs ? '💾 Đang lưu...' : '✓ Đã lưu Database'}
                   </span>
                 </div>
 
                 <div className="flex items-center gap-2">
-                  {/* Chuyển chế độ xem */}
-                  <div className="flex bg-slate-950 p-0.5 rounded-lg border border-slate-800">
-                    <button
-                      type="button"
-                      onClick={() => setSubViewMode('lines')}
-                      className={`flex items-center gap-1 px-2.5 py-1 rounded text-[11px] font-medium transition ${
-                        subViewMode === 'lines'
-                          ? 'bg-amber-500 text-slate-950 font-bold'
-                          : 'text-slate-400 hover:text-slate-200'
-                      }`}
-                    >
-                      <List className="w-3 h-3" />
-                      Từng Dòng
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setBulkTranscript(fullTranscript || subtitles.map((s) => s.text).join(' '));
-                        setSubViewMode('bulk');
-                      }}
-                      className={`flex items-center gap-1 px-2.5 py-1 rounded text-[11px] font-medium transition ${
-                        subViewMode === 'bulk'
-                          ? 'bg-amber-500 text-slate-950 font-bold'
-                          : 'text-slate-400 hover:text-slate-200'
-                      }`}
-                    >
-                      <FileEdit className="w-3 h-3" />
-                      Sửa Toàn Bộ
-                    </button>
-                  </div>
-
+                  {/* Nút mở Modal Soạn Thảo Đa Năng */}
                   <button
                     type="button"
-                    onClick={() => processVoiceFile(voicePath, voiceName, true)}
-                    disabled={processingSTT}
-                    className="flex items-center gap-1 px-2.5 py-1 bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border border-amber-500/30 rounded text-[11px] font-medium transition disabled:opacity-50"
-                    title="Chạy lại Gemini 3.1 Flash Lite để sửa chính tả ngữ cảnh & lọc ảo giác"
+                    onClick={() => setShowManualSubModal(true)}
+                    className="flex items-center gap-1.5 px-3 py-1 bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border border-amber-500/30 rounded-lg text-[11px] font-semibold transition shadow-sm"
+                    title="Mở cửa sổ modal soạn thảo phụ đề thủ công / dán lời bài hát"
                   >
-                    <Wand2 className={`w-3 h-3 ${processingSTT ? 'animate-spin' : ''}`} />
-                    {processingSTT ? 'Đang sửa AI...' : 'Chạy Lại Sửa AI'}
+                    <Sparkles className="w-3 h-3 text-amber-400" />
+                    Soạn Thảo (Modal)
                   </button>
+
+                  {/* Chuyển chế độ xem khi có subtitles */}
+                  {subtitles.length > 0 && (
+                    <div className="flex bg-slate-950 p-0.5 rounded-lg border border-slate-800">
+                      <button
+                        type="button"
+                        onClick={() => setSubViewMode('lines')}
+                        className={`flex items-center gap-1 px-2.5 py-1 rounded text-[11px] font-medium transition ${
+                          subViewMode === 'lines'
+                            ? 'bg-amber-500 text-slate-950 font-bold'
+                            : 'text-slate-400 hover:text-slate-200'
+                        }`}
+                      >
+                        <List className="w-3 h-3" />
+                        Từng Dòng
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setBulkTranscript(fullTranscript || subtitles.map((s) => s.text).join(' '));
+                          setSubViewMode('bulk');
+                        }}
+                        className={`flex items-center gap-1 px-2.5 py-1 rounded text-[11px] font-medium transition ${
+                          subViewMode === 'bulk'
+                            ? 'bg-amber-500 text-slate-950 font-bold'
+                            : 'text-slate-400 hover:text-slate-200'
+                        }`}
+                      >
+                        <FileEdit className="w-3 h-3" />
+                        Sửa Toàn Bộ
+                      </button>
+                    </div>
+                  )}
+
+                  {subtitles.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => processVoiceFile(voicePath, voiceName, true, false)}
+                      disabled={processingSTT}
+                      className="flex items-center gap-1 px-2.5 py-1 bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border border-amber-500/30 rounded text-[11px] font-medium transition disabled:opacity-50"
+                      title="Chạy lại Gemini 3.1 Flash Lite để sửa chính tả ngữ cảnh & lọc ảo giác"
+                    >
+                      <Wand2 className={`w-3 h-3 ${processingSTT ? 'animate-spin' : ''}`} />
+                      {processingSTT ? 'Đang sửa AI...' : 'Chạy Lại Sửa AI'}
+                    </button>
+                  )}
                 </div>
               </div>
 
               {/* CHẾ ĐỘ 1: XEM & SỬA TỪNG DÒNG (Line-by-line Editor) */}
-              {subViewMode === 'lines' && (
+              {subViewMode === 'lines' && subtitles.length > 0 && (
                 <div className="max-h-60 overflow-y-auto space-y-1.5 pr-2">
                   {subtitles.map((sub, i) => {
                     const isEditing = editingSubIdx === i;
@@ -1576,7 +1713,7 @@ export const GeneratorWizard: React.FC<GeneratorWizardProps> = ({
                     onChange={(e) => setBulkTranscript(e.target.value)}
                     rows={5}
                     className="w-full bg-slate-950 border border-slate-700 rounded-xl p-3 text-xs text-slate-100 focus:outline-none focus:border-amber-400 leading-relaxed font-sans"
-                    placeholder="Nhập hoặc chỉnh sửa toàn bộ văn bản của giọng đọc..."
+                    placeholder="Nhập hoặc dán toàn bộ lời bài hát / phụ đề tại đây để hệ thống tự chia dòng 9:16..."
                   />
                   <div className="flex items-center justify-between gap-3">
                     <span className="text-[10px] text-slate-500 font-mono">
@@ -1585,7 +1722,12 @@ export const GeneratorWizard: React.FC<GeneratorWizardProps> = ({
                     <div className="flex items-center gap-2">
                       <button
                         type="button"
-                        onClick={() => setSubViewMode('lines')}
+                        onClick={() => {
+                          setSubViewMode('lines');
+                          if (subtitles.length === 0) {
+                            setIsMusicMode(true);
+                          }
+                        }}
                         className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-xs font-medium transition"
                       >
                         Hủy Bỏ
@@ -1780,11 +1922,186 @@ export const GeneratorWizard: React.FC<GeneratorWizardProps> = ({
           )}
         </div>
 
+        {/* KHỐI CHỌN MẪU GHÉP THỨ TỰ VIDEO */}
+        <div className="bg-[#151D2E] border border-slate-800 rounded-2xl p-6 shadow-xl">
+          <div className="flex flex-wrap items-center justify-between gap-4 mb-4">
+            <div className="flex items-center gap-3">
+              <div className="w-7 h-7 rounded-full bg-amber-500 text-slate-950 font-bold text-xs flex items-center justify-center">
+                <Film className="w-3.5 h-3.5 fill-slate-950" />
+              </div>
+              <div>
+                <h3 className="font-bold text-slate-100 text-sm font-montserrat">
+                  Mẫu Kịch Bản Ghép Thứ Tự Video
+                </h3>
+                <p className="text-[11px] text-slate-400">
+                  Lựa chọn ghép nối tiếp chuẩn 4 giai đoạn hoặc tùy chọn chủ đề / giai đoạn yêu thích
+                </p>
+              </div>
+            </div>
+
+            {/* TAB CHỌN MẪU */}
+            <div className="flex bg-slate-950/80 p-1 rounded-xl border border-slate-800">
+              <button
+                type="button"
+                onClick={() => setStorylinePattern('standard_4_stages')}
+                className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer ${
+                  storylinePattern === 'standard_4_stages'
+                    ? 'bg-amber-500 text-slate-950 shadow-md shadow-amber-500/20'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                <Layers className="w-3.5 h-3.5" />
+                Mẫu 1: Chuẩn 4 Giai Đoạn
+              </button>
+              <button
+                type="button"
+                onClick={() => setStorylinePattern('custom_stages')}
+                className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer ${
+                  storylinePattern === 'custom_stages'
+                    ? 'bg-amber-500 text-slate-950 shadow-md shadow-amber-500/20'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                <Sparkles className="w-3.5 h-3.5" />
+                Mẫu 2: Tùy Chọn Chủ Đề / Giai Đoạn
+              </button>
+            </div>
+          </div>
+
+          {/* MẪU 1: CHUẨN 4 GIAI ĐOẠN */}
+          {storylinePattern === 'standard_4_stages' && (
+            <div className="bg-slate-950/40 p-4 rounded-xl border border-slate-800/80 text-xs">
+              <div className="flex items-center justify-between gap-2 mb-2">
+                <span className="font-bold text-amber-400 font-montserrat flex items-center gap-2">
+                  Quy Trình 4 Giai Đoạn Tiến Trình Không Gian Thờ
+                </span>
+                <span className="text-[10px] text-slate-400 font-mono">0% ➔ 100% Thời lượng Voice</span>
+              </div>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-center text-[11px]">
+                <div className="p-2.5 rounded-xl bg-orange-950/30 border border-orange-500/30 text-orange-200">
+                  <div className="font-bold">1. Thi Công Thô</div>
+                  <div className="text-[10px] text-slate-400 mt-0.5">0% - 20% đầu</div>
+                </div>
+                <div className="p-2.5 rounded-xl bg-blue-950/30 border border-blue-500/30 text-blue-200">
+                  <div className="font-bold">2. Lắp Ráp Hoàn Thiện</div>
+                  <div className="text-[10px] text-slate-400 mt-0.5">20% - 50% tiếp</div>
+                </div>
+                <div className="p-2.5 rounded-xl bg-purple-950/30 border border-purple-500/30 text-purple-200">
+                  <div className="font-bold">3. Cắm Hoa Trang Trí</div>
+                  <div className="text-[10px] text-slate-400 mt-0.5">50% - 75% tiếp</div>
+                </div>
+                <div className="p-2.5 rounded-xl bg-amber-950/30 border border-amber-500/30 text-amber-200">
+                  <div className="font-bold">4. Đèn & Lễ Phật</div>
+                  <div className="text-[10px] text-slate-400 mt-0.5">75% - 100% cuối</div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* MẪU 2: TÙY CHỌN CHỦ ĐỀ / GIAI ĐOẠN */}
+          {storylinePattern === 'custom_stages' && (
+            <div className="bg-slate-950/40 p-4 rounded-xl border border-amber-500/30 text-xs">
+              <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
+                <div>
+                  <span className="font-bold text-amber-300 font-montserrat block">
+                    Chọn 1 Hoặc Nhiều Giai Đoạn Cho Video
+                  </span>
+                  <span className="text-[11px] text-slate-400">
+                    Video sẽ ghép nối tiếp theo đúng thứ tự các giai đoạn được tick chọn (thiếu footage sẽ tự động lặp lại video ít dùng nhất)
+                  </span>
+                </div>
+                <span className="text-[10px] bg-amber-500/20 text-amber-300 border border-amber-500/40 px-2 py-0.5 rounded font-mono font-bold">
+                  Đã chọn {selectedCustomStages.length} / 4 giai đoạn
+                </span>
+              </div>
+
+              {/* 4 Thẻ checkbox chọn Stage */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                {[
+                  {
+                    id: 'STAGE_1_RAW_CARPENTRY',
+                    label: 'Giai Đoạn 1: Thi Công Thô',
+                    desc: 'Thợ mộc làm gỗ, cắt xẻ, đánh ráp, dựng khung thô',
+                    color: 'orange',
+                    border: 'border-orange-500/50',
+                    bgActive: 'bg-orange-500/20',
+                    text: 'text-orange-300',
+                  },
+                  {
+                    id: 'STAGE_2_ASSEMBLY_FINISHING',
+                    label: 'Giai Đoạn 2: Lắp Ráp Hoàn Thiện',
+                    desc: 'Lắp ráp tủ thờ vào không gian, vách ngăn CNC, lau dọn',
+                    color: 'blue',
+                    border: 'border-blue-500/50',
+                    bgActive: 'bg-blue-500/20',
+                    text: 'text-blue-300',
+                  },
+                  {
+                    id: 'STAGE_3_DECOR_FLOWERS',
+                    label: 'Giai Đoạn 3: Cắm Hoa Trang Trí',
+                    desc: 'Cắm hoa sen, hoa huệ, bày mâm bồng, chỉnh trang tượng Phật',
+                    color: 'purple',
+                    border: 'border-purple-500/50',
+                    bgActive: 'bg-purple-500/20',
+                    text: 'text-purple-300',
+                  },
+                  {
+                    id: 'STAGE_4_WORSHIP_ALTAR',
+                    label: 'Giai Đoạn 4: Đèn Hào Quang & Lễ Phật',
+                    desc: 'Bật đèn hào quang sáng rực, toàn cảnh trang nghiêm, lễ Phật',
+                    color: 'amber',
+                    border: 'border-amber-500/50',
+                    bgActive: 'bg-amber-500/20',
+                    text: 'text-amber-300',
+                  },
+                ].map((item) => {
+                  const isChecked = selectedCustomStages.includes(item.id);
+                  return (
+                    <div
+                      key={item.id}
+                      onClick={() => handleToggleStage(item.id)}
+                      className={`p-3 rounded-xl border cursor-pointer transition flex items-start justify-between gap-3 ${
+                        isChecked
+                          ? `${item.bgActive} ${item.border} shadow-md`
+                          : 'bg-slate-900/60 border-slate-800 hover:border-slate-700 opacity-60 hover:opacity-100'
+                      }`}
+                    >
+                      <div className="flex items-start gap-2.5">
+                        <div className="mt-0.5">
+                          {isChecked ? (
+                            <CheckSquare className={`w-4 h-4 ${item.text}`} />
+                          ) : (
+                            <Square className="w-4 h-4 text-slate-500" />
+                          )}
+                        </div>
+                        <div>
+                          <p className={`text-xs font-bold ${isChecked ? item.text : 'text-slate-300'}`}>
+                            {item.label}
+                          </p>
+                          <p className="text-[10px] text-slate-400 mt-0.5 line-clamp-1">
+                            {item.desc}
+                          </p>
+                        </div>
+                      </div>
+
+                      {isChecked && (
+                        <span className={`text-[9px] px-1.5 py-0.5 rounded font-bold font-mono ${item.bgActive} ${item.text}`}>
+                          Đang bật
+                        </span>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+        </div>
+
         {/* BƯỚC 3: NÚT LẮP RÁP TIMELINE */}
         <div className="pt-2">
           <button
             onClick={handleAssembleStoryline}
-            disabled={assembling || subtitles.length === 0 || (sourceMode === 'single' && !selectedProjectId)}
+            disabled={assembling || voiceDuration === 0 || !voicePath || (sourceMode === 'single' && !selectedProjectId)}
             className="w-full py-4 bg-gradient-to-r from-amber-500 via-yellow-500 to-amber-500 hover:from-amber-600 hover:to-yellow-600 text-slate-950 font-extrabold text-sm rounded-2xl shadow-xl shadow-amber-500/20 transition-all flex items-center justify-center gap-3 disabled:opacity-40"
           >
             {assembling ? (
@@ -2079,6 +2396,17 @@ export const GeneratorWizard: React.FC<GeneratorWizardProps> = ({
           </div>
         </div>
       )}
+
+      {/* MODAL SOẠN THẢO PHỤ ĐỀ THỦ CÔNG */}
+      <ManualSubtitleModal
+        isOpen={showManualSubModal}
+        onClose={() => setShowManualSubModal(false)}
+        voicePath={voicePath}
+        voiceDuration={voiceDuration}
+        initialSubtitles={subtitles}
+        initialTranscript={fullTranscript || subtitles.map((s) => s.text).join('\n')}
+        onApplySubtitles={handleApplyManualSubtitles}
+      />
     </div>
   );
 };

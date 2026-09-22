@@ -3,7 +3,7 @@ import cors from 'cors';
 import path from 'path';
 import fs from 'fs';
 import dotenv from 'dotenv';
-import { libraryRouter } from './routes/library.routes.js';
+import { libraryRouter, purgeMissingProjectsAndSources } from './routes/library.routes.js';
 import { generatorRouter } from './routes/generator.routes.js';
 import { renderRouter } from './routes/render.routes.js';
 import { settingsRouter } from './routes/settings.routes.js';
@@ -194,6 +194,9 @@ app.listen(PORT, () => {
   console.log(`🚀 AUTO VIDEO TÂM ĐỨC BACKEND SERVER RUNNING`);
   console.log(`📡 URL: http://localhost:${PORT}`);
   console.log(`==================================================\n`);
+
+  // Tự động dọn dẹp các folder/file không còn tồn tại trên ổ cứng khi khởi động
+  purgeMissingProjectsAndSources();
 
   // Bắt đầu Watcher nếu có cấu hình ROOT_SOURCE_DIR
   const rootSource = process.env.ROOT_SOURCE_DIR;

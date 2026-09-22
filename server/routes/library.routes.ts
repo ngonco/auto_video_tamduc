@@ -8,9 +8,38 @@ import { trimVideoFile } from '../services/ffmpeg.js';
 
 export const libraryRouter = Router();
 
-// Lấy danh sách tất cả các Công trình
+/**
+ * Tự động kiểm tra và dọn dẹp các công trình hoặc file media không còn tồn tại trên ổ đĩa
+ */
+export function purgeMissingProjectsAndSources() {
+  try {
+    const projects = db.prepare('SELECT id, folder_name, folder_path FROM projects').all() as any[];
+    for (const proj of projects) {
+      if (!fs.existsSync(proj.folder_path)) {
+        console.log(`[SelfHealing] Project folder missing on disk, purging from SQLite: ${proj.folder_name} (${proj.folder_path})`);
+        const thumbs = db.prepare('SELECT thumbnail_path FROM video_sources WHERE project_id = ?').all(proj.id) as any[];
+        for (const t of thumbs) {
+          if (t.thumbnail_path) {
+            const thumbFull = path.resolve(process.cwd(), t.thumbnail_path);
+            if (fs.existsSync(thumbFull)) {
+              try { fs.unlinkSync(thumbFull); } catch (_) {}
+            }
+          }
+        }
+        db.prepare('DELETE FROM video_sources WHERE project_id = ?').run(proj.id);
+        db.prepare('DELETE FROM projects WHERE id = ?').run(proj.id);
+      }
+    }
+  } catch (err: any) {
+    console.warn('[SelfHealing] Error syncing missing projects:', err.message);
+  }
+}
+
+// Lấy danh sách tất cả các Công trình (tự động dọn sạch folder đã bị xóa trên đĩa)
 libraryRouter.get('/projects', (req, res) => {
   try {
+    purgeMissingProjectsAndSources();
+
     const projects = db.prepare(`
       SELECT p.*, 
         (SELECT COUNT(*) FROM video_sources WHERE project_id = p.id) as total_videos,
@@ -25,11 +54,79 @@ libraryRouter.get('/projects', (req, res) => {
   }
 });
 
-// Lấy danh sách video của 1 công trình
+// Lấy danh sách video của 1 công trình (ưu tiên ít dùng lên đầu)
 libraryRouter.get('/projects/:id/videos', (req, res) => {
   try {
-    const videos = db.prepare('SELECT * FROM video_sources WHERE project_id = ? ORDER BY stage, aesthetic_score DESC').all(req.params.id);
+    const videos = db.prepare('SELECT * FROM video_sources WHERE project_id = ? ORDER BY usage_count ASC, aesthetic_score DESC').all(req.params.id);
     res.json({ success: true, data: videos });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Lấy danh sách footage mới nhất kèm usage_count đồng bộ từ CSDL cho Timeline Editor
+libraryRouter.get('/sources', (req, res) => {
+  try {
+    const { projectId } = req.query;
+    let clips: any[] = [];
+
+    if (!projectId || projectId === 'ALL' || projectId === 'ALL_PROJECTS') {
+      clips = db.prepare(`
+        SELECT 
+          v.id, v.project_id as projectId, p.folder_name as projectName,
+          v.file_name as fileName, v.file_path as filePath,
+          v.duration, v.width, v.height, v.aspect_ratio_type as aspectRatioType,
+          v.stage, v.aesthetic_score as aestheticScore, v.scene_description as sceneDescription,
+          v.thumbnail_path as thumbnailPath, v.usage_count as usageCount, v.last_used_at as lastUsedAt
+        FROM video_sources v
+        LEFT JOIN projects p ON v.project_id = p.id
+        ORDER BY v.usage_count ASC, v.aesthetic_score DESC
+      `).all();
+    } else {
+      clips = db.prepare(`
+        SELECT 
+          v.id, v.project_id as projectId, p.folder_name as projectName,
+          v.file_name as fileName, v.file_path as filePath,
+          v.duration, v.width, v.height, v.aspect_ratio_type as aspectRatioType,
+          v.stage, v.aesthetic_score as aestheticScore, v.scene_description as sceneDescription,
+          v.thumbnail_path as thumbnailPath, v.usage_count as usageCount, v.last_used_at as lastUsedAt
+        FROM video_sources v
+        LEFT JOIN projects p ON v.project_id = p.id
+        WHERE v.project_id = ?
+        ORDER BY v.usage_count ASC, v.aesthetic_score DESC
+      `).all(projectId);
+    }
+
+    const validClips = clips.filter((c: any) => fs.existsSync(c.filePath));
+    res.json({ success: true, data: validClips });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Tăng số lần sử dụng của một source video/ảnh khi được chọn thay thế trên Timeline
+libraryRouter.post('/increment-source-usage', (req, res) => {
+  try {
+    const { sourceId, filePath } = req.body;
+    if (!sourceId && !filePath) {
+      return res.status(400).json({ success: false, error: 'Thiếu sourceId hoặc filePath' });
+    }
+
+    if (sourceId) {
+      db.prepare(`
+        UPDATE video_sources 
+        SET usage_count = COALESCE(usage_count, 0) + 1, last_used_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `).run(sourceId);
+    } else if (filePath) {
+      db.prepare(`
+        UPDATE video_sources 
+        SET usage_count = COALESCE(usage_count, 0) + 1, last_used_at = CURRENT_TIMESTAMP
+        WHERE file_path = ?
+      `).run(filePath);
+    }
+
+    res.json({ success: true });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.message });
   }
@@ -189,10 +286,19 @@ libraryRouter.get('/projects/:id/scan-status', (req, res) => {
   res.json({ success: true, data: job });
 });
 
-// Xóa 1 công trình khỏi thư viện
+// Xóa 1 công trình khỏi thư viện (kèm dọn dẹp thumbnail cache)
 libraryRouter.delete('/projects/:id', (req, res) => {
   try {
     const projectId = req.params.id;
+    const thumbs = db.prepare('SELECT thumbnail_path FROM video_sources WHERE project_id = ?').all(projectId) as any[];
+    for (const t of thumbs) {
+      if (t.thumbnail_path) {
+        const thumbFull = path.resolve(process.cwd(), t.thumbnail_path);
+        if (fs.existsSync(thumbFull)) {
+          try { fs.unlinkSync(thumbFull); } catch (_) {}
+        }
+      }
+    }
     db.prepare('DELETE FROM video_sources WHERE project_id = ?').run(projectId);
     db.prepare('DELETE FROM projects WHERE id = ?').run(projectId);
     res.json({ success: true, message: 'Đã xóa công trình khỏi thư viện thành công' });

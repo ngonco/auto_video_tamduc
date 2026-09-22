@@ -32,9 +32,31 @@ export const KaraokeLayer: React.FC<KaraokeLayerProps> = ({
     (line) => currentTime >= line.start - 0.1 && currentTime <= line.end + 0.2
   );
 
-  if (!activeLine) {
+  // Đảm bảo an toàn 100% nếu activeLine.words bị thiếu hoặc rỗng (phụ đề thủ công)
+  const resolvedWords = React.useMemo(() => {
+    if (!activeLine) return [];
+    if (activeLine.words && activeLine.words.length > 0) {
+      return activeLine.words;
+    }
+    if (!activeLine.text) return [];
+    const tokens = activeLine.text.trim().split(/\s+/).filter(Boolean);
+    if (tokens.length === 0) return [];
+    const dur = Math.max(0.2, activeLine.end - activeLine.start);
+    const wordDur = dur / tokens.length;
+    return tokens.map((token, idx) => ({
+      word: token,
+      start: Number((activeLine.start + idx * wordDur).toFixed(2)),
+      end: Number((activeLine.start + (idx + 1) * wordDur).toFixed(2)),
+    }));
+  }, [activeLine]);
+
+  if (!activeLine || resolvedWords.length === 0) {
     return null;
   }
+
+  // Chia 2 hàng cân đối nếu câu dài (> 6 từ hoặc > 28 ký tự)
+  const shouldWrapBalanced = resolvedWords.length > 6 || (activeLine.text && activeLine.text.length > 28);
+  const midIndex = shouldWrapBalanced ? Math.ceil(resolvedWords.length / 2) : -1;
 
   return (
     <div
@@ -64,10 +86,11 @@ export const KaraokeLayer: React.FC<KaraokeLayerProps> = ({
           display: 'flex',
           flexWrap: 'wrap',
           justifyContent: 'center',
+          maxWidth: 960,
           gap: '12px 14px',
         }}
       >
-        {activeLine.words.map((wordObj, idx) => {
+        {resolvedWords.map((wordObj, idx) => {
           const isCurrent = currentTime >= wordObj.start && currentTime <= wordObj.end;
           const isPassed = currentTime > wordObj.end;
 
@@ -87,19 +110,21 @@ export const KaraokeLayer: React.FC<KaraokeLayerProps> = ({
           }
 
           return (
-            <span
-              key={idx}
-              style={{
-                color: color,
-                transform: `scale(${scale})`,
-                transition: 'all 0.1s ease',
-                WebkitTextStroke: stroke,
-                textShadow: shadow,
-                display: 'inline-block',
-              }}
-            >
-              {wordObj.word}
-            </span>
+            <React.Fragment key={idx}>
+              {idx === midIndex && <div style={{ flexBasis: '100%', height: 0 }} />}
+              <span
+                style={{
+                  color: color,
+                  transform: `scale(${scale})`,
+                  transition: 'all 0.1s ease',
+                  WebkitTextStroke: stroke,
+                  textShadow: shadow,
+                  display: 'inline-block',
+                }}
+              >
+                {wordObj.word}
+              </span>
+            </React.Fragment>
           );
         })}
       </div>

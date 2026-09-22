@@ -108,11 +108,37 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     const startStr = formatAssTime(line.start);
     const endStr = formatAssTime(line.end);
 
+    // Đảm bảo an toàn 100% nếu line.words rỗng (chế độ nhập thủ công)
+    let words = line.words;
+    if (!words || words.length === 0) {
+      const tokens = (line.text || '').trim().split(/\s+/).filter(Boolean);
+      if (tokens.length > 0) {
+        const lineDur = Math.max(0.2, line.end - line.start);
+        const wDur = lineDur / tokens.length;
+        words = tokens.map((token, idx) => ({
+          word: token,
+          start: Number((line.start + idx * wDur).toFixed(2)),
+          end: Number((line.start + (idx + 1) * wDur).toFixed(2)),
+        }));
+      } else {
+        words = [];
+      }
+    }
+
+    // Chia 2 hàng cân đối nếu câu dài (> 6 từ hoặc > 28 ký tự)
+    const shouldWrapBalanced = words.length > 6 || (line.text && line.text.length > 28);
+    const midIndex = shouldWrapBalanced ? Math.ceil(words.length / 2) : -1;
+
     // Xây dựng chuỗi Karaoke tag {\kf<centiseconds>} cho từng từ kèm thẻ {\k<gap>} cho khoảng lặng
     let karaokeText = '';
     let lastTime = line.start;
 
-    line.words.forEach((w) => {
+    words.forEach((w, wIdx) => {
+      if (wIdx === midIndex) {
+        // Chèn tag xuống dòng cân đối \N cho câu dài trên khung 9:16
+        karaokeText = karaokeText.trimEnd() + '\\N';
+      }
+
       const gapSec = w.start - lastTime;
       if (gapSec > 0.04) {
         const gapCenti = Math.max(1, Math.round(gapSec * 100));
@@ -344,7 +370,10 @@ export async function renderFinalVideo(
     const voiceVol = req.voiceVolume || 1.0;
     const bgmVol = req.bgmVolume || 0.15;
 
-    let complexFilter = `[0:v]subtitles=filename='${normalizedAssPath}':fontsdir='${fontsDir}',format=yuv420p[outv];`;
+    const hasSubtitles = Array.isArray(req.subtitles) && req.subtitles.length > 0;
+    let complexFilter = hasSubtitles
+      ? `[0:v]subtitles=filename='${normalizedAssPath}':fontsdir='${fontsDir}',format=yuv420p[outv];`
+      : `[0:v]format=yuv420p[outv];`;
 
     if (hasBgm) {
       // BGM Fade-out ở 1.0s cuối của phần Voice

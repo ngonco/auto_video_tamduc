@@ -30,6 +30,7 @@ import {
   X,
   Volume2,
   VolumeX,
+  Plus,
 } from 'lucide-react';
 import {
   DndContext,
@@ -270,9 +271,19 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
   const [selectedBgm, setSelectedBgm] = useState<string>(timelineData.bgm?.selectedBgm ?? '');
   const [bgmList, setBgmList] = useState<{ name: string; fileName: string; filePath: string }[]>([]);
 
-  // Subtitle editing state
+  // Subtitle editing & interactive resize/move state
   const [editingSubId, setEditingSubId] = useState<string | null>(null);
   const [editingSubText, setEditingSubText] = useState<string>('');
+  const [selectedSubId, setSelectedSubId] = useState<string | null>(null);
+  const [subDragState, setSubDragState] = useState<{
+    subId: string;
+    handle: 'left' | 'right' | 'move';
+    startX: number;
+    origStart: number;
+    origEnd: number;
+    currentStart: number;
+    currentEnd: number;
+  } | null>(null);
 
   // Subtitle custom size & position state (khôi phục từ timelineData nếu có)
   const [subtitleFontSize, setSubtitleFontSize] = useState<number>(() => {
@@ -635,15 +646,24 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
   const [renderOutputPath, setRenderOutputPath] = useState<string | null>(null);
   const [showVideoModal, setShowVideoModal] = useState<boolean>(false);
 
-  // Active Tab trên Sidebar bên phải ('clip' | 'project')
-  const [activeRightTab, setActiveRightTab] = useState<'clip' | 'project'>('project');
+  // Active Tab trên Sidebar bên phải ('clip' | 'subtitle' | 'project')
+  const [activeRightTab, setActiveRightTab] = useState<'clip' | 'subtitle' | 'project'>('project');
 
   // Khi chọn clip -> Tự động chuyển tab sang 'clip' (Clip Inspector)
   useEffect(() => {
     if (selectedClipId) {
       setActiveRightTab('clip');
+      setSelectedSubId(null);
     }
   }, [selectedClipId]);
+
+  // Khi chọn phụ đề -> Tự động chuyển tab sang 'subtitle' (Subtitle Inspector)
+  useEffect(() => {
+    if (selectedSubId) {
+      setActiveRightTab('subtitle');
+      setSelectedClipId(null);
+    }
+  }, [selectedSubId]);
 
   // Zoom & Pan state
   const [zoomLevel, setZoomLevel] = useState<number>(1.0);
@@ -1289,8 +1309,29 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
   // ── Open Project Sources Selector Modal ──
   const handleOpenProjectSourceModal = useCallback((clipId: string) => {
     setReplacingClipId(clipId);
+
+    // 1. Tự động chuyển đúng tab Giai đoạn của clip đang chọn
+    const targetClip = timelineData.clips.find((c) => c.id === clipId);
+    if (targetClip && targetClip.stage) {
+      setProjectSourceStageFilter(targetClip.stage);
+    }
+
+    // 2. Mở modal chọn source
     setShowSourceModal(true);
-  }, []);
+
+    // 3. Tải và đồng bộ danh sách footage mới nhất kèm usage_count từ database
+    const projId = timelineData.projectId || '';
+    fetch(`/api/library/sources?projectId=${encodeURIComponent(projId)}`)
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.success && Array.isArray(data.data) && data.data.length > 0) {
+          setLocalAvailableSources(data.data);
+        }
+      })
+      .catch((err) => {
+        console.warn('[TimelineEditor] Could not refresh project sources:', err);
+      });
+  }, [timelineData.clips, timelineData.projectId]);
 
   // ── Replace Clip from Project Sources ──
   const handleSelectProjectSource = useCallback(
@@ -1313,6 +1354,22 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
         return c;
       });
       onUpdateClips(newClips);
+
+      // Cập nhật tăng usageCount tức thì trong bộ nhớ localAvailableSources
+      setLocalAvailableSources((prev) =>
+        prev.map((s) => (s.id === source.id || s.filePath === source.filePath ? { ...s, usageCount: (s.usageCount || 0) + 1 } : s))
+      );
+
+      // Gửi request cập nhật vĩnh viễn trong CSDL SQLite
+      fetch('/api/library/increment-source-usage', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sourceId: source.id,
+          filePath: source.filePath,
+        }),
+      }).catch((err) => console.warn('[TimelineEditor] Failed to increment source usage:', err));
+
       setShowSourceModal(false);
       setReplacingClipId(null);
     },
@@ -1636,6 +1693,162 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
     [timelineData.subtitles, editingSubText, onUpdateSubtitles]
   );
 
+  // ── Thêm phụ đề mới tại vị trí vạch Playhead ──
+  const handleAddSubtitleAtPlayhead = useCallback(() => {
+    const playheadSec = currentFrame / fps;
+    const newStart = Number(playheadSec.toFixed(2));
+    const newEnd = Number(Math.min(totalDuration, newStart + 3.5).toFixed(2));
+    const newId = `sub_${Date.now()}`;
+    const defaultText = 'NHẬP PHỤ ĐỀ...';
+    const tokens = defaultText.split(/\s+/).filter(Boolean);
+    const dur = Math.max(0.2, newEnd - newStart);
+    const wordDur = dur / Math.max(1, tokens.length);
+
+    const newSub: SubtitleLine = {
+      id: newId,
+      start: newStart,
+      end: newEnd,
+      text: defaultText,
+      words: tokens.map((w, i) => ({
+        word: w,
+        start: Number((newStart + i * wordDur).toFixed(2)),
+        end: Number((newStart + (i + 1) * wordDur).toFixed(2)),
+      })),
+    };
+
+    const newSubs = [...timelineData.subtitles, newSub].sort((a, b) => a.start - b.start);
+    onUpdateSubtitles(newSubs);
+    setSelectedSubId(newId);
+    setSelectedClipId(null);
+    setActiveRightTab('subtitle');
+    setEditingSubId(newId);
+    setEditingSubText(defaultText);
+  }, [currentFrame, fps, totalDuration, timelineData.subtitles, onUpdateSubtitles]);
+
+  // ── Cập nhật phụ đề (thời gian hoặc text) ──
+  const handleUpdateSubtitle = useCallback(
+    (id: string, updates: Partial<SubtitleLine>) => {
+      const newSubs = timelineData.subtitles
+        .map((sub) => {
+          if (sub.id === id) {
+            const updated = { ...sub, ...updates };
+            const cleanText = (updated.text || '').trim();
+            const tokens = cleanText.split(/\s+/).filter(Boolean);
+            const dur = Math.max(0.2, updated.end - updated.start);
+            const wordDur = dur / Math.max(1, tokens.length);
+            return {
+              ...updated,
+              text: updated.text,
+              words: tokens.map((w, i) => ({
+                word: w,
+                start: Number((updated.start + i * wordDur).toFixed(2)),
+                end: Number((updated.start + (i + 1) * wordDur).toFixed(2)),
+              })),
+            };
+          }
+          return sub;
+        })
+        .sort((a, b) => a.start - b.start);
+
+      onUpdateSubtitles(newSubs);
+    },
+    [timelineData.subtitles, onUpdateSubtitles]
+  );
+
+  // ── Xóa câu phụ đề ──
+  const handleDeleteSubtitle = useCallback(
+    (id: string) => {
+      const newSubs = timelineData.subtitles.filter((s) => s.id !== id);
+      onUpdateSubtitles(newSubs);
+      if (selectedSubId === id) {
+        setSelectedSubId(null);
+        setActiveRightTab('project');
+      }
+    },
+    [timelineData.subtitles, selectedSubId, onUpdateSubtitles]
+  );
+
+  // ── Phát thử câu phụ đề trên Remotion Player ──
+  const handlePlaySubtitlePreview = useCallback(
+    (start: number) => {
+      if (!playerRef.current) return;
+      const startFrame = Math.round(start * fps);
+      playerRef.current.seekTo(startFrame);
+      if (playerRef.current.isMuted()) {
+        playerRef.current.unmute();
+      }
+      playerRef.current.setVolume(1.0);
+      playerRef.current.play();
+    },
+    [fps]
+  );
+
+  // ── Xử lý Kéo Thả Trực Quan Co Giãn & Di Chuyển Khối Phụ Đề Trên Track ──
+  useEffect(() => {
+    if (!subDragState) return;
+
+    const handlePointerMove = (e: PointerEvent) => {
+      const deltaX = e.clientX - subDragState.startX;
+      const deltaSec = deltaX / pxPerSec;
+
+      if (subDragState.handle === 'left') {
+        const newStart = Math.max(
+          0,
+          Math.min(subDragState.origEnd - 0.3, Number((subDragState.origStart + deltaSec).toFixed(2)))
+        );
+        setSubDragState((prev) => (prev ? { ...prev, currentStart: newStart } : null));
+      } else if (subDragState.handle === 'right') {
+        const newEnd = Math.max(
+          subDragState.origStart + 0.3,
+          Math.min(totalDuration, Number((subDragState.origEnd + deltaSec).toFixed(2)))
+        );
+        setSubDragState((prev) => (prev ? { ...prev, currentEnd: newEnd } : null));
+      } else if (subDragState.handle === 'move') {
+        const dur = subDragState.origEnd - subDragState.origStart;
+        const rawStart = subDragState.origStart + deltaSec;
+        const newStart = Math.max(0, Math.min(totalDuration - dur, Number(rawStart.toFixed(2))));
+        const newEnd = Number((newStart + dur).toFixed(2));
+        setSubDragState((prev) => (prev ? { ...prev, currentStart: newStart, currentEnd: newEnd } : null));
+      }
+    };
+
+    const handlePointerUp = () => {
+      if (subDragState) {
+        const { subId, currentStart, currentEnd } = subDragState;
+        const newSubs = timelineData.subtitles
+          .map((sub) => {
+            if (sub.id === subId) {
+              const tokens = sub.text.trim().split(/\s+/).filter(Boolean);
+              const dur = Math.max(0.2, currentEnd - currentStart);
+              const wordDur = dur / Math.max(1, tokens.length);
+              return {
+                ...sub,
+                start: currentStart,
+                end: currentEnd,
+                words: tokens.map((w, i) => ({
+                  word: w,
+                  start: Number((currentStart + i * wordDur).toFixed(2)),
+                  end: Number((currentStart + (i + 1) * wordDur).toFixed(2)),
+                })),
+              };
+            }
+            return sub;
+          })
+          .sort((a, b) => a.start - b.start);
+
+        onUpdateSubtitles(newSubs);
+      }
+      setSubDragState(null);
+    };
+
+    window.addEventListener('pointermove', handlePointerMove);
+    window.addEventListener('pointerup', handlePointerUp);
+    return () => {
+      window.removeEventListener('pointermove', handlePointerMove);
+      window.removeEventListener('pointerup', handlePointerUp);
+    };
+  }, [subDragState, pxPerSec, totalDuration, timelineData.subtitles, onUpdateSubtitles]);
+
   // ── Zoom Controls ──
   const handleZoom = useCallback(
     (delta: number) => {
@@ -1897,7 +2110,10 @@ sourceDuration: Number(outroDuration.toFixed(2)),
         <div className="h-12 px-4 bg-[#151D2E] border-b border-slate-800 flex items-center justify-between flex-shrink-0">
           <div className="flex items-center gap-2">
             <button
-              onClick={() => setActiveRightTab('clip')}
+              onClick={() => {
+                setActiveRightTab('clip');
+                setSelectedSubId(null);
+              }}
               disabled={!selectedClipId}
               className={`py-1.5 px-3 rounded-lg text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
                 activeRightTab === 'clip' && selectedClipId
@@ -1906,7 +2122,7 @@ sourceDuration: Number(outroDuration.toFixed(2)),
               }`}
             >
               <Sliders className="w-3.5 h-3.5" />
-              <span>Chỉnh Sửa Clip</span>
+              <span>Chỉnh Clip</span>
               {selectedClipId && (
                 <span className="text-[10px] px-1.5 py-0.2 rounded bg-black/30 font-mono font-extrabold">
                   #{timelineData.clips.findIndex((c) => c.id === selectedClipId) + 1}
@@ -1915,9 +2131,34 @@ sourceDuration: Number(outroDuration.toFixed(2)),
             </button>
 
             <button
-              onClick={() => setActiveRightTab('project')}
+              onClick={() => {
+                setActiveRightTab('subtitle');
+                setSelectedClipId(null);
+              }}
+              disabled={!selectedSubId}
               className={`py-1.5 px-3 rounded-lg text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
-                activeRightTab === 'project' || !selectedClipId
+                activeRightTab === 'subtitle' && selectedSubId
+                  ? 'bg-yellow-400 text-slate-950 shadow-md shadow-yellow-400/20'
+                  : 'bg-slate-850 text-slate-400 hover:text-slate-200 border border-slate-700 disabled:opacity-40 disabled:cursor-not-allowed'
+              }`}
+            >
+              <Type className="w-3.5 h-3.5" />
+              <span>Chỉnh Phụ Đề</span>
+              {selectedSubId && (
+                <span className="text-[10px] px-1.5 py-0.2 rounded bg-black/30 font-mono font-extrabold">
+                  #{timelineData.subtitles.findIndex((s) => s.id === selectedSubId) + 1}
+                </span>
+              )}
+            </button>
+
+            <button
+              onClick={() => {
+                setActiveRightTab('project');
+                setSelectedClipId(null);
+                setSelectedSubId(null);
+              }}
+              className={`py-1.5 px-3 rounded-lg text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
+                activeRightTab === 'project' || (!selectedClipId && !selectedSubId)
                   ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40 shadow-xs'
                   : 'bg-slate-850 text-slate-400 hover:text-slate-200 border border-slate-700'
               }`}
@@ -2195,8 +2436,192 @@ sourceDuration: Number(outroDuration.toFixed(2)),
             );
           })()}
 
-          {/* TAB 2: PROJECT SETTINGS (LƯỚI 3 CỘT) */}
-          {(activeRightTab === 'project' || !selectedClipId) && (
+          {/* TAB 2: SUBTITLE INSPECTOR (LƯỚI 3 CỘT) */}
+          {activeRightTab === 'subtitle' && selectedSubId && (() => {
+            const selSubIdx = timelineData.subtitles.findIndex((s) => s.id === selectedSubId);
+            if (selSubIdx === -1) return null;
+            const selSub = timelineData.subtitles[selSubIdx];
+            const dur = Math.max(0, selSub.end - selSub.start);
+
+            return (
+              <div className="grid grid-cols-3 gap-3 h-full min-h-[185px]">
+                {/* CỘT 1: THÔNG TIN CÂU & PREVIEW PHÁT */}
+                <div className="p-3 bg-slate-900/90 border border-yellow-500/30 rounded-xl flex flex-col justify-between shadow-sm">
+                  <div className="space-y-1.5">
+                    <div className="flex items-center justify-between">
+                      <span className="px-2 py-0.5 rounded-md bg-yellow-400 text-slate-950 font-mono font-extrabold text-xs">
+                        Câu #{selSubIdx + 1}
+                      </span>
+                      <span className="text-[10px] font-mono text-yellow-300 bg-yellow-950/60 px-2 py-0.5 rounded border border-yellow-500/30">
+                        ⏱️ {dur.toFixed(1)}s • {selSub.words?.length || 0} từ
+                      </span>
+                    </div>
+                    <p className="text-xs text-slate-300 italic truncate font-sans">
+                      "{selSub.text || 'Chưa nhập lời...'}"
+                    </p>
+                  </div>
+
+                  {/* Nút phát thử câu trên Player */}
+                  <div className="space-y-2 mt-2">
+                    <button
+                      type="button"
+                      onClick={() => handlePlaySubtitlePreview(selSub.start)}
+                      className="w-full py-2 bg-gradient-to-r from-amber-500 to-yellow-500 hover:from-amber-400 hover:to-yellow-400 text-slate-950 font-bold rounded-lg text-xs flex items-center justify-center gap-1.5 transition shadow-sm cursor-pointer"
+                    >
+                      <Play className="w-3.5 h-3.5 fill-slate-950" />
+                      <span>Phát Thử Câu Này Trên Player</span>
+                    </button>
+                    <div className="text-[9.5px] text-slate-400 text-center font-mono">
+                      Cỡ chữ ASS: {subtitleFontSize}px • Lề đáy: {subtitleBottomPercent}%
+                    </div>
+                  </div>
+                </div>
+
+                {/* CỘT 2: ĐIỀU CHỈNH THỜI GIAN START & END */}
+                <div className="p-3 bg-slate-900/90 border border-slate-800 rounded-xl flex flex-col justify-between shadow-sm">
+                  <div className="space-y-2">
+                    {/* Bắt đầu */}
+                    <div>
+                      <label className="text-[10px] font-bold text-slate-300 flex items-center justify-between mb-1">
+                        <span>⏱️ Bắt Đầu (giây):</span>
+                        <span className="font-mono text-emerald-400">{selSub.start.toFixed(2)}s</span>
+                      </label>
+                      <div className="flex items-center gap-1">
+                        <button
+                          type="button"
+                          onClick={() => handleUpdateSubtitle(selSub.id, { start: Math.max(0, Number((selSub.start - 0.5).toFixed(2))) })}
+                          className="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded text-[10px] font-mono cursor-pointer"
+                        >
+                          -0.5s
+                        </button>
+                        <input
+                          type="number"
+                          step={0.1}
+                          min={0}
+                          max={selSub.end - 0.2}
+                          value={selSub.start}
+                          onChange={(e) => handleUpdateSubtitle(selSub.id, { start: Math.max(0, Number(e.target.value)) })}
+                          className="flex-1 bg-slate-950 border border-slate-700 rounded px-2 py-1 text-xs text-center font-mono text-slate-100 outline-none"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => handleUpdateSubtitle(selSub.id, { start: Math.min(selSub.end - 0.2, Number((selSub.start + 0.5).toFixed(2))) })}
+                          className="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded text-[10px] font-mono cursor-pointer"
+                        >
+                          +0.5s
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Kết thúc */}
+                    <div>
+                      <label className="text-[10px] font-bold text-slate-300 flex items-center justify-between mb-1">
+                        <span>⏱️ Kết Thúc (giây):</span>
+                        <span className="font-mono text-amber-400">{selSub.end.toFixed(2)}s</span>
+                      </label>
+                      <div className="flex items-center gap-1">
+                        <button
+                          type="button"
+                          onClick={() => handleUpdateSubtitle(selSub.id, { end: Math.max(selSub.start + 0.2, Number((selSub.end - 0.5).toFixed(2))) })}
+                          className="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded text-[10px] font-mono cursor-pointer"
+                        >
+                          -0.5s
+                        </button>
+                        <input
+                          type="number"
+                          step={0.1}
+                          min={selSub.start + 0.2}
+                          max={totalDuration}
+                          value={selSub.end}
+                          onChange={(e) => handleUpdateSubtitle(selSub.id, { end: Math.max(selSub.start + 0.2, Number(e.target.value)) })}
+                          className="flex-1 bg-slate-950 border border-slate-700 rounded px-2 py-1 text-xs text-center font-mono text-slate-100 outline-none"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => handleUpdateSubtitle(selSub.id, { end: Math.min(totalDuration, Number((selSub.end + 0.5).toFixed(2))) })}
+                          className="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded text-[10px] font-mono cursor-pointer"
+                        >
+                          +0.5s
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="text-[10px] text-slate-500 font-mono text-center">
+                    💡 Kéo tay kéo 2 đầu trên timeline để co giãn nhanh
+                  </div>
+                </div>
+
+                {/* CỘT 3: SỬA VĂN BẢN & THAO TÁC */}
+                <div className="p-3 bg-slate-900/90 border border-slate-800 rounded-xl flex flex-col justify-between shadow-sm">
+                  <div className="space-y-1.5">
+                    <label className="text-[10px] font-bold text-slate-300 block">
+                      Nội Dung Lời Câu Hát:
+                    </label>
+                    <textarea
+                      rows={2}
+                      value={selSub.text}
+                      onChange={(e) => handleUpdateSubtitle(selSub.id, { text: e.target.value })}
+                      placeholder="Nhập nội dung phụ đề..."
+                      className="w-full bg-slate-950 border border-slate-700 focus:border-yellow-400 rounded-lg p-2 text-xs text-slate-100 outline-none resize-none font-sans"
+                    />
+                  </div>
+
+                  <div className="flex items-center justify-between gap-2 pt-2">
+                    <button
+                      type="button"
+                      onClick={() => handleDeleteSubtitle(selSub.id)}
+                      className="px-3 py-1.5 bg-red-500/20 hover:bg-red-500/30 text-red-300 border border-red-500/40 rounded-lg text-xs font-bold flex items-center gap-1 transition cursor-pointer"
+                      title="Xóa câu phụ đề này"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                      <span>Xóa Câu</span>
+                    </button>
+
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const nextStart = selSub.end;
+                          const nextEnd = Math.min(totalDuration, Number((nextStart + 3.5).toFixed(2)));
+                          const newId = `sub_${Date.now()}`;
+                          const newSub: SubtitleLine = {
+                            id: newId,
+                            start: nextStart,
+                            end: nextEnd,
+                            text: 'CÂU TIẾP THEO...',
+                            words: [],
+                          };
+                          const newSubs = [...timelineData.subtitles, newSub].sort((a, b) => a.start - b.start);
+                          onUpdateSubtitles(newSubs);
+                          setSelectedSubId(newId);
+                        }}
+                        className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-yellow-300 border border-slate-700 rounded-lg text-xs font-semibold flex items-center gap-1 transition cursor-pointer"
+                        title="Thêm câu mới ngay sau câu này"
+                      >
+                        <Plus className="w-3.5 h-3.5" />
+                        <span>Nối Câu</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSelectedSubId(null);
+                          setActiveRightTab('project');
+                        }}
+                        className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-xs transition cursor-pointer"
+                      >
+                        ✕ Đóng
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            );
+          })()}
+
+          {/* TAB 3: PROJECT SETTINGS (LƯỚI 3 CỘT) */}
+          {(activeRightTab === 'project' || (!selectedClipId && !selectedSubId)) && (
             <div className="grid grid-cols-3 gap-3 h-full min-h-[185px]">
               {/* CỘT 1: THÔNG TIN CÔNG TRÌNH & VOICE AUDIO */}
               <div className="p-3 bg-slate-900/90 border border-slate-800 rounded-xl flex flex-col justify-between shadow-sm">
@@ -2535,11 +2960,19 @@ sourceDuration: Number(outroDuration.toFixed(2)),
                   <span>Video ({timelineData.clips.length}{isOutroActive ? ' + Outro' : ''})</span>
                 </div>
               </div>
-              <div className="flex-1 flex items-center px-3">
+              <div className="flex-1 flex items-center px-3 justify-between">
                 <div className="text-[11px] font-bold text-yellow-300 flex items-center gap-1.5">
                   <Type className="w-3.5 h-3.5" />
                   <span>Sub ({timelineData.subtitles.length})</span>
                 </div>
+                <button
+                  onClick={handleAddSubtitleAtPlayhead}
+                  className="px-1.5 py-0.5 bg-amber-500/20 hover:bg-amber-500/40 text-amber-300 rounded border border-amber-500/40 text-[9px] font-bold flex items-center gap-0.5 cursor-pointer shadow-sm transition"
+                  title="Thêm câu phụ đề mới tại vị trí vạch Playhead hiện tại"
+                >
+                  <Plus className="w-3 h-3" />
+                  <span>Thêm</span>
+                </button>
               </div>
             </div>
 
@@ -2704,60 +3137,107 @@ sourceDuration: Number(outroDuration.toFixed(2)),
                 {/* ── TRACK 2: SUBTITLE LINES (absolute position per voice timing) ── */}
                 <div className="relative min-h-[48px] h-[48px]">
                   {timelineData.subtitles.map((sub) => {
-                    const subDuration = sub.end - sub.start;
-                    const widthPx = Math.max(4, subDuration * pxPerSec);
-                    const leftPx = sub.start * pxPerSec;
-                    const isEditing = editingSubId === sub.id;
+                    const isDragging = subDragState?.subId === sub.id;
+                    const displayStart = isDragging ? subDragState!.currentStart : sub.start;
+                    const displayEnd = isDragging ? subDragState!.currentEnd : sub.end;
+                    const subDuration = Math.max(0.1, displayEnd - displayStart);
+                    const widthPx = Math.max(16, subDuration * pxPerSec);
+                    const leftPx = displayStart * pxPerSec;
+                    const isSelected = selectedSubId === sub.id;
 
                     return (
                       <div
                         key={sub.id}
-                        className={`absolute top-1 bottom-1 bg-slate-900/80 border rounded-md flex flex-col justify-center px-1 py-0.5 text-[9px] overflow-hidden ${
-                          isEditing
-                            ? 'border-amber-500 bg-amber-500/10 z-20'
-                            : 'border-yellow-500/20 hover:border-yellow-500/40 z-10'
-                        }`}
-                        style={{ left: leftPx, width: widthPx }}
+                        onPointerDown={(e) => {
+                          if ((e.target as HTMLElement).tagName === 'INPUT' || (e.target as HTMLElement).tagName === 'BUTTON') return;
+                          setSubDragState({
+                            subId: sub.id,
+                            handle: 'move',
+                            startX: e.clientX,
+                            origStart: sub.start,
+                            origEnd: sub.end,
+                            currentStart: sub.start,
+                            currentEnd: sub.end,
+                          });
+                          setSelectedSubId(sub.id);
+                          setSelectedClipId(null);
+                          setActiveRightTab('subtitle');
+                        }}
+                        className={`absolute top-1 bottom-1 rounded-lg flex flex-col justify-center px-1.5 py-0.5 text-[9px] select-none transition-shadow ${
+                          isSelected
+                            ? 'border-2 border-yellow-400 bg-yellow-400/20 shadow-lg shadow-yellow-500/30 z-30'
+                            : 'border border-yellow-500/30 bg-slate-900/90 hover:border-yellow-400/60 hover:bg-slate-850 z-10'
+                        } ${isDragging ? 'opacity-90 ring-2 ring-yellow-400 z-40' : ''}`}
+                        style={{ left: leftPx, width: widthPx, cursor: 'grab' }}
                       >
-                        {isEditing ? (
-                          <div className="flex flex-col gap-0.5">
-                            <input
-                              value={editingSubText}
-                              onChange={(e) => setEditingSubText(e.target.value)}
-                              className="w-full bg-black/50 border border-amber-500/50 text-white text-[10px] px-1 py-0.5 rounded outline-none"
-                              autoFocus
-                              onKeyDown={(e) => {
-                                if (e.key === 'Enter') handleSaveSubtitle(sub.id);
-                                if (e.key === 'Escape') setEditingSubId(null);
-                              }}
-                            />
-                            <div className="flex justify-end gap-1">
-                              <button
-                                onClick={() => setEditingSubId(null)}
-                                className="px-1.5 py-[1px] bg-slate-800 text-[8px] rounded text-slate-300 cursor-pointer"
-                              >
-                                Hủy
-                              </button>
-                              <button
-                                onClick={() => handleSaveSubtitle(sub.id)}
-                                className="px-1.5 py-[1px] bg-amber-500 text-[8px] rounded text-black font-bold cursor-pointer"
-                              >
-                                Lưu
-                              </button>
-                            </div>
+                        {/* Floating Tooltip khi đang kéo */}
+                        {isDragging && (
+                          <div className="absolute -top-7 left-1/2 -translate-x-1/2 bg-black/90 text-yellow-300 font-mono text-[9px] px-2 py-0.5 rounded shadow-xl border border-yellow-500/50 pointer-events-none z-50 whitespace-nowrap">
+                            ⏱️ {displayStart.toFixed(1)}s ➔ {displayEnd.toFixed(1)}s ({subDuration.toFixed(1)}s)
                           </div>
-                        ) : (
-                          <p
-                            onClick={() => {
-                              setEditingSubId(sub.id);
-                              setEditingSubText(sub.text);
-                            }}
-                            className="text-[10px] text-slate-200 font-medium truncate cursor-pointer hover:text-amber-300 leading-tight"
-                            title={`${sub.start.toFixed(1)}s - ${sub.end.toFixed(1)}s: "${sub.text}" (Click để sửa)`}
-                          >
-                            {widthPx >= 25 ? sub.text : '•••'}
-                          </p>
                         )}
+
+                        {/* Left Resize Handle */}
+                        <div
+                          onPointerDown={(e) => {
+                            e.stopPropagation();
+                            setSubDragState({
+                              subId: sub.id,
+                              handle: 'left',
+                              startX: e.clientX,
+                              origStart: sub.start,
+                              origEnd: sub.end,
+                              currentStart: sub.start,
+                              currentEnd: sub.end,
+                            });
+                            setSelectedSubId(sub.id);
+                            setSelectedClipId(null);
+                            setActiveRightTab('subtitle');
+                          }}
+                          className="absolute top-0 bottom-0 left-0 w-2.5 hover:w-3.5 bg-emerald-500/20 hover:bg-emerald-500/60 cursor-ew-resize z-20 flex items-center justify-center group/lsub rounded-l"
+                          title="Kéo co giãn mốc Bắt Đầu câu"
+                        >
+                          <div className="w-[2px] h-3 bg-emerald-400 rounded-full group-hover/lsub:h-4 transition-all" />
+                        </div>
+
+                        {/* Content */}
+                        <div className="px-2 flex items-center justify-between overflow-hidden">
+                          <p
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setSelectedSubId(sub.id);
+                              setSelectedClipId(null);
+                              setActiveRightTab('subtitle');
+                            }}
+                            className="text-[10px] text-slate-100 font-medium truncate leading-tight flex-1"
+                            title={`${sub.start.toFixed(1)}s - ${sub.end.toFixed(1)}s: "${sub.text}" (Click để chọn)`}
+                          >
+                            {widthPx >= 30 ? sub.text : '•••'}
+                          </p>
+                        </div>
+
+                        {/* Right Resize Handle */}
+                        <div
+                          onPointerDown={(e) => {
+                            e.stopPropagation();
+                            setSubDragState({
+                              subId: sub.id,
+                              handle: 'right',
+                              startX: e.clientX,
+                              origStart: sub.start,
+                              origEnd: sub.end,
+                              currentStart: sub.start,
+                              currentEnd: sub.end,
+                            });
+                            setSelectedSubId(sub.id);
+                            setSelectedClipId(null);
+                            setActiveRightTab('subtitle');
+                          }}
+                          className="absolute top-0 bottom-0 right-0 w-2.5 hover:w-3.5 bg-amber-500/20 hover:bg-amber-500/60 cursor-ew-resize z-20 flex items-center justify-center group/rsub rounded-r"
+                          title="Kéo co giãn mốc Kết Thúc câu"
+                        >
+                          <div className="w-[2px] h-3 bg-amber-400 rounded-full group-hover/rsub:h-4 transition-all" />
+                        </div>
                       </div>
                     );
                   })}
@@ -3025,6 +3505,7 @@ sourceDuration: Number(outroDuration.toFixed(2)),
                       sceneDescription: '',
                       thumbnailPath: c.thumbnailPath,
                       mediaType: c.mediaType,
+                      usageCount: 0,
                     }));
 
                 const filtered = pool.filter((src) => {
@@ -3033,7 +3514,18 @@ sourceDuration: Number(outroDuration.toFixed(2)),
                   return matchStage && matchText;
                 });
 
-                if (filtered.length === 0) {
+                // Sắp xếp: Video trước Ảnh -> Số lần dùng ít nhất lên đầu (ASC) -> Điểm thẩm mỹ cao hơn xếp trước (DESC)
+                const sorted = [...filtered].sort((a, b) => {
+                  const aIsImg = a.mediaType === 'image' || isImageFile(a.filePath);
+                  const bIsImg = b.mediaType === 'image' || isImageFile(b.filePath);
+                  if (aIsImg !== bIsImg) return aIsImg ? 1 : -1;
+                  const aUsage = a.usageCount || 0;
+                  const bUsage = b.usageCount || 0;
+                  if (aUsage !== bUsage) return aUsage - bUsage;
+                  return (b.aestheticScore || 0) - (a.aestheticScore || 0);
+                });
+
+                if (sorted.length === 0) {
                   return (
                     <div className="py-16 text-center text-slate-500 text-xs">
                       Không tìm thấy video hoặc ảnh nào phù hợp bộ lọc.
@@ -3043,7 +3535,7 @@ sourceDuration: Number(outroDuration.toFixed(2)),
 
                 return (
                   <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
-                    {filtered.map((src, idx) => {
+                    {sorted.map((src, idx) => {
                       const stColor = STAGE_COLORS[src.stage] || '#64748b';
                       const stLabel = STAGE_LABELS[src.stage] || 'N/A';
                       const isImg = src.mediaType === 'image' || isImageFile(src.filePath);

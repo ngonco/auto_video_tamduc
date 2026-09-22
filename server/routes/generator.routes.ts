@@ -9,7 +9,9 @@ import { transcribeAudio } from '../services/stt-service.js';
 import {
   polishAndSegmentSubtitles,
   segmentAndPolishSubtitles,
-  realignAndSegmentFromCustomText
+  realignAndSegmentFromCustomText,
+  filterHallucinatedWords,
+  SubtitleLine
 } from '../services/subtitle-fixer.js';
 import { generateStoryline, SourceClipRecord } from '../services/storyline-engine.js';
 import { getVideoMetadata, extractKeyframes } from '../services/ffmpeg.js';
@@ -339,29 +341,87 @@ generatorRouter.delete('/voices/:id', (req, res) => {
 // 5. Nhận diện giọng nói STT + Sửa chính tả ngữ cảnh bằng AI + Tự động Ghi nhớ Voice
 generatorRouter.post('/process-voice', async (req, res) => {
   try {
-    const { filePath, originalName, forceRefresh } = req.body;
+    const { filePath, originalName, forceRefresh, skipStt } = req.body;
     if (!filePath || !fs.existsSync(filePath)) {
       return res.status(400).json({ success: false, error: 'Đường dẫn file voice không hợp lệ' });
+    }
+
+    const fileName = fixUtf8Filename(originalName || path.basename(filePath));
+
+    // Nếu người dùng chủ động tắt "Tự động tạo phụ đề" (skipStt: true)
+    if (skipStt) {
+      console.log('[Generator] skipStt is TRUE. Skipping Whisper STT & Gemini for:', filePath);
+      let accurateDuration = 30.0;
+      try {
+        const audioMeta = await getVideoMetadata(filePath);
+        if (audioMeta.duration && audioMeta.duration > 0) {
+          accurateDuration = audioMeta.duration;
+        }
+      } catch (_) {}
+
+      const existing: any = db.prepare(`SELECT * FROM voices WHERE file_path = ?`).get(filePath);
+      const voiceId = existing?.id || 'voice_' + uuidv4().slice(0, 8);
+
+      db.prepare(`
+        INSERT INTO voices (id, file_name, file_path, duration, stt_text, raw_words_json, subtitles_json, created_at)
+        VALUES (?, ?, ?, ?, '', '[]', '[]', CURRENT_TIMESTAMP)
+        ON CONFLICT(file_path) DO UPDATE SET
+          duration = excluded.duration,
+          stt_text = '',
+          raw_words_json = '[]',
+          subtitles_json = '[]'
+      `).run(voiceId, fileName, filePath, accurateDuration);
+
+      return res.json({
+        success: true,
+        isMusicMode: true,
+        data: {
+          id: voiceId,
+          rawText: '',
+          duration: accurateDuration,
+          words: [],
+          subtitles: [],
+        },
+      });
     }
 
     // Kiểm tra xem voice đã từng được xử lý trong database chưa để trả kết quả ngay (nếu không yêu cầu forceRefresh)
     if (!forceRefresh) {
       const existing: any = db.prepare(`SELECT * FROM voices WHERE file_path = ?`).get(filePath);
-      if (existing && existing.subtitles_json) {
+      if (existing) {
         const rawWords = existing.raw_words_json ? JSON.parse(existing.raw_words_json) : [];
         let subs = existing.subtitles_json ? JSON.parse(existing.subtitles_json) : [];
+        const isMusic = rawWords.length === 0 && subs.length === 0;
+
+        // Nếu là bản ghi nhạc nền không phụ đề
+        if (isMusic) {
+          return res.json({
+            success: true,
+            cached: true,
+            isMusicMode: true,
+            data: {
+              id: existing.id,
+              rawText: '',
+              duration: existing.duration,
+              words: [],
+              subtitles: [],
+            },
+          });
+        }
+
         const lastSubEnd = subs.length > 0 ? subs[subs.length - 1].end : 0;
         const lastRawWordEnd = rawWords.length > 0 ? rawWords[rawWords.length - 1].end : 0;
 
         // Nếu bản ghi cũ trong DB bị thiếu phụ đề đoạn cuối (lastSubEnd hoặc lastRawWordEnd < 85% thời lượng voice)
         // -> Tự động kích hoạt nhận diện lại toàn diện để chữa lành và phục hồi đầy đủ 100% phụ đề!
-        if (existing.duration > 5 && (lastSubEnd < existing.duration * 0.85 || lastRawWordEnd < existing.duration * 0.85 || subs.length === 0)) {
+        if (existing.duration > 5 && (lastSubEnd < existing.duration * 0.85 || lastRawWordEnd < existing.duration * 0.85)) {
           console.log(`[Generator] Detected incomplete legacy subtitle tail for ${filePath} (${lastSubEnd.toFixed(1)}s / ${existing.duration.toFixed(1)}s). Triggering auto-heal STT...`);
           // Không return cache, để chạy tiếp xuống transcribeAudio bên dưới để chữa lành
         } else {
           return res.json({
             success: true,
             cached: true,
+            isMusicMode: false,
             data: {
               id: existing.id,
               rawText: existing.stt_text,
@@ -375,10 +435,10 @@ generatorRouter.post('/process-voice', async (req, res) => {
     }
 
     console.log('[Generator] Starting STT transcription on:', filePath);
-    // Bước 1: Whisper STT lấy word timestamps
+    // Bước 1: Whisper STT lấy word timestamps (kèm cơ chế an toàn khi gặp nhạc không lời)
     const sttResult = await transcribeAudio(filePath);
 
-    // Lấy thời lượng thực tế chuẩn xác của file voice
+    // Lấy thời lượng thực tế chuẩn xác của file voice bằng ffprobe
     let accurateDuration = sttResult.duration;
     try {
       const audioMeta = await getVideoMetadata(filePath);
@@ -387,12 +447,24 @@ generatorRouter.post('/process-voice', async (req, res) => {
       }
     } catch (_) {}
 
-    console.log('[Generator] Polishing subtitles with LLM...');
-    // Bước 2: Gemini LLM chuẩn hóa từ ngữ Phật pháp và ngắt câu 9:16
-    const polishedSubtitles = await polishAndSegmentSubtitles(sttResult.text, sttResult.words);
+    const isMusicMode = Boolean(sttResult.isMusic || !sttResult.text?.trim() || sttResult.words.length === 0);
+    let polishedSubtitles: SubtitleLine[] = [];
+
+    if (!isMusicMode) {
+      console.log('[Generator] Polishing subtitles with LLM...');
+      // Bước 2: Gemini LLM chuẩn hóa từ ngữ Phật pháp và ngắt câu 9:16
+      try {
+        polishedSubtitles = await polishAndSegmentSubtitles(sttResult.text, sttResult.words);
+      } catch (polishErr: any) {
+        console.warn('[Generator] Warning polishing subtitles with LLM, falling back to heuristic:', polishErr.message);
+        polishedSubtitles = segmentAndPolishSubtitles(filterHallucinatedWords(sttResult.words));
+      }
+    } else {
+      console.log('[Generator] Detected Music / Non-speech audio mode. Skipping subtitle polishing.');
+    }
 
     const voiceId = 'voice_' + uuidv4().slice(0, 8);
-    const fileName = fixUtf8Filename(originalName || path.basename(filePath));
+    // fileName đã được khởi tạo ở đầu hàm
 
     // Bước 3: Ghi nhớ vào SQLite database
     db.prepare(`
@@ -408,16 +480,17 @@ generatorRouter.post('/process-voice', async (req, res) => {
       fileName,
       filePath,
       accurateDuration,
-      sttResult.text,
+      isMusicMode ? '' : sttResult.text,
       JSON.stringify(sttResult.words),
       JSON.stringify(polishedSubtitles)
     );
 
     res.json({
       success: true,
+      isMusicMode,
       data: {
         id: voiceId,
-        rawText: sttResult.text,
+        rawText: isMusicMode ? '' : sttResult.text,
         duration: accurateDuration,
         words: sttResult.words,
         subtitles: polishedSubtitles,
@@ -468,10 +541,10 @@ generatorRouter.post('/update-subtitles', (req, res) => {
   }
 });
 
-// 5c. Phân bổ lại toàn bộ phụ đề từ văn bản tùy chỉnh (Bulk Transcript Editor)
+// 5c. Phân bổ lại toàn bộ phụ đề từ văn bản tùy chỉnh (Bulk Transcript Editor & Manual Subtitles)
 generatorRouter.post('/resegment-transcript', async (req, res) => {
   try {
-    const { voicePath, customText, duration } = req.body;
+    const { voicePath, customText, duration, startOffset, endOffset } = req.body;
     if (!voicePath || !customText) {
       return res.status(400).json({ success: false, error: 'Thiếu voicePath hoặc customText' });
     }
@@ -480,7 +553,13 @@ generatorRouter.post('/resegment-transcript', async (req, res) => {
     const rawWords = existing?.raw_words_json ? JSON.parse(existing.raw_words_json) : [];
     const totalDur = Number(duration) || existing?.duration || 30.0;
 
-    const newSubtitles = await realignAndSegmentFromCustomText(customText, rawWords, totalDur);
+    const newSubtitles = await realignAndSegmentFromCustomText(
+      customText,
+      rawWords,
+      totalDur,
+      startOffset !== undefined ? Number(startOffset) : undefined,
+      endOffset !== undefined ? Number(endOffset) : undefined
+    );
 
     if (existing) {
       db.prepare(`
@@ -527,7 +606,7 @@ generatorRouter.get('/library-summary', (req, res) => {
 // 7. Tự động sinh Storyline Clips theo 4 giai đoạn (hỗ trợ cả 2 chế độ: 1 công trình hoặc Toàn bộ thư viện)
 generatorRouter.post('/assemble-storyline', async (req, res) => {
   try {
-    const { projectId, targetDuration, mode } = req.body;
+    const { projectId, targetDuration, mode, pattern, selectedStages } = req.body;
     const isAllMode = mode === 'all' || projectId === 'ALL' || !projectId;
 
     if (!isAllMode && !projectId) {
@@ -576,9 +655,11 @@ generatorRouter.post('/assemble-storyline', async (req, res) => {
       });
     }
 
-    // Sinh storyline theo thuật toán 4 giai đoạn kèm chống trùng lặp vừa phải
+    // Sinh storyline theo Mẫu 1 (Chuẩn 4 giai đoạn) hoặc Mẫu 2 (Tùy chọn chủ đề / giai đoạn)
     const storyline = generateStoryline(clips, Number(targetDuration), {
       mode: isAllMode ? 'all' : 'single',
+      pattern: pattern === 'custom_stages' ? 'custom_stages' : 'standard_4_stages',
+      selectedStages: Array.isArray(selectedStages) ? selectedStages : undefined,
     });
 
     // Cập nhật tăng usage_count và ghi nhận last_used_at cho các clip được chọn

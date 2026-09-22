@@ -54,6 +54,8 @@ export class FolderWatcherService {
     });
 
     this.watcher.on('add', (filePath: string) => this.handleFileAdded(filePath, rootDir));
+    this.watcher.on('unlink', (filePath: string) => this.handleFileDeleted(filePath, rootDir));
+    this.watcher.on('unlinkDir', (dirPath: string) => this.handleFolderDeleted(dirPath, rootDir));
   }
 
   public stop() {
@@ -110,6 +112,67 @@ export class FolderWatcherService {
       }
     } catch (err) {
       console.error('[Watcher] Error recording video file:', err);
+    }
+  }
+
+  private async handleFolderDeleted(dirPath: string, rootDir: string) {
+    try {
+      console.log(`[Watcher] Folder removed on disk: ${dirPath}`);
+      const folderName = path.basename(dirPath);
+      const normalizedPath = path.normalize(dirPath);
+
+      const project: any = db.prepare(`
+        SELECT id, folder_name FROM projects 
+        WHERE folder_path = ? OR folder_name = ?
+      `).get(dirPath, folderName) || db.prepare(`
+        SELECT id, folder_name FROM projects 
+        WHERE folder_path = ?
+      `).get(normalizedPath);
+
+      if (project) {
+        console.log(`[Watcher] Purging project from SQLite: ${project.folder_name} (${project.id})`);
+        const thumbs = db.prepare('SELECT thumbnail_path FROM video_sources WHERE project_id = ?').all(project.id) as any[];
+        for (const t of thumbs) {
+          if (t.thumbnail_path) {
+            const thumbFull = path.resolve(process.cwd(), t.thumbnail_path);
+            if (fs.existsSync(thumbFull)) {
+              try { fs.unlinkSync(thumbFull); } catch (_) {}
+            }
+          }
+        }
+        db.prepare('DELETE FROM video_sources WHERE project_id = ?').run(project.id);
+        db.prepare('DELETE FROM projects WHERE id = ?').run(project.id);
+        console.log(`[Watcher] Successfully purged project ${project.folder_name} and its media records`);
+      }
+    } catch (err: any) {
+      console.error('[Watcher] Error handling folder deleted:', err.message);
+    }
+  }
+
+  private async handleFileDeleted(filePath: string, rootDir: string) {
+    try {
+      const ext = path.extname(filePath).toLowerCase();
+      if (!MEDIA_EXTS.includes(ext)) return;
+
+      console.log(`[Watcher] Media file removed on disk: ${filePath}`);
+      const video: any = db.prepare('SELECT id, project_id, thumbnail_path FROM video_sources WHERE file_path = ?').get(filePath);
+      if (video) {
+        if (video.thumbnail_path) {
+          const thumbFull = path.resolve(process.cwd(), video.thumbnail_path);
+          if (fs.existsSync(thumbFull)) {
+            try { fs.unlinkSync(thumbFull); } catch (_) {}
+          }
+        }
+        db.prepare('DELETE FROM video_sources WHERE id = ?').run(video.id);
+
+        if (video.project_id) {
+          const total = (db.prepare('SELECT COUNT(*) as count FROM video_sources WHERE project_id = ?').get(video.project_id) as any)?.count || 0;
+          db.prepare('UPDATE projects SET total_videos = ?, last_scanned_at = datetime(\'now\') WHERE id = ?').run(total, video.project_id);
+        }
+        console.log(`[Watcher] Successfully deleted source record for: ${path.basename(filePath)}`);
+      }
+    } catch (err: any) {
+      console.error('[Watcher] Error handling file deleted:', err.message);
     }
   }
 

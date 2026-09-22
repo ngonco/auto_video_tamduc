@@ -52,6 +52,8 @@ export interface StorylineOptions {
   mode?: 'single' | 'all';
   minClipSec?: number;
   maxClipSec?: number;
+  pattern?: 'standard_4_stages' | 'custom_stages';
+  selectedStages?: string[];
 }
 
 /**
@@ -104,11 +106,15 @@ export function generateStoryline(
   let mode: 'single' | 'all' = 'single';
   let minClipSec = 4.0;
   let maxClipSec = 5.5;
+  let pattern: 'standard_4_stages' | 'custom_stages' = 'standard_4_stages';
+  let selectedStages: string[] = [];
 
   if (typeof optionsOrMinSec === 'object' && optionsOrMinSec !== null) {
     mode = optionsOrMinSec.mode || 'single';
     minClipSec = optionsOrMinSec.minClipSec || 4.0;
     maxClipSec = optionsOrMinSec.maxClipSec || 5.5;
+    pattern = optionsOrMinSec.pattern || 'standard_4_stages';
+    selectedStages = optionsOrMinSec.selectedStages || [];
   } else {
     minClipSec = typeof optionsOrMinSec === 'number' ? optionsOrMinSec : 4.0;
     maxClipSec = maxClipSecArg || 5.5;
@@ -160,10 +166,25 @@ export function generateStoryline(
     clipsByStage[stage].push(clip);
   });
 
-  // Sắp xếp trong từng stage theo thứ tự ưu tiên: Video trước -> Usage ít trước -> Thẩm mỹ cao -> 9:16
+  // Sắp xếp trong từng stage theo thứ tự ưu tiên: Video trước -> Usage ít trước (ASC) -> Thẩm mỹ cao (DESC) -> 9:16
   Object.keys(clipsByStage).forEach((stageKey) => {
     clipsByStage[stageKey] = sortStageCandidates(clipsByStage[stageKey]);
   });
+
+  // Xác định danh sách stages mục tiêu
+  const ALL_STAGES: Array<'STAGE_1_RAW_CARPENTRY' | 'STAGE_2_ASSEMBLY_FINISHING' | 'STAGE_3_DECOR_FLOWERS' | 'STAGE_4_WORSHIP_ALTAR'> = [
+    'STAGE_1_RAW_CARPENTRY',
+    'STAGE_2_ASSEMBLY_FINISHING',
+    'STAGE_3_DECOR_FLOWERS',
+    'STAGE_4_WORSHIP_ALTAR',
+  ];
+
+  const isCustomMode = pattern === 'custom_stages' && selectedStages.length > 0;
+  // Giữ đúng thứ tự tiến trình tự nhiên giữa các stage được chọn
+  const targetStages = isCustomMode
+    ? ALL_STAGES.filter((st) => selectedStages.includes(st))
+    : ALL_STAGES;
+  const effectiveStages = targetStages.length > 0 ? targetStages : ALL_STAGES;
 
   // 3. Phân bổ clip động (Dynamic Duration Accumulator) - Tuyệt đối không đứng hình (No-Freeze Frame)
   const idealClipDur = Math.max(minClipSec, Math.min(maxClipSec, 5.0));
@@ -191,29 +212,49 @@ export function generateStoryline(
 
     // Xác định stage ưu tiên theo tiến trình thời gian
     let preferredStage: 'STAGE_1_RAW_CARPENTRY' | 'STAGE_2_ASSEMBLY_FINISHING' | 'STAGE_3_DECOR_FLOWERS' | 'STAGE_4_WORSHIP_ALTAR';
-    if (progressRatio <= 0.20) {
-      preferredStage = 'STAGE_1_RAW_CARPENTRY';
-    } else if (progressRatio <= 0.50) {
-      preferredStage = 'STAGE_2_ASSEMBLY_FINISHING';
-    } else if (progressRatio <= 0.75) {
-      preferredStage = 'STAGE_3_DECOR_FLOWERS';
+
+    if (isCustomMode) {
+      // Mẫu 2: Chia đều dải thời lượng cho các stage được chọn theo thứ tự
+      const stageIdx = Math.min(
+        effectiveStages.length - 1,
+        Math.floor(progressRatio * effectiveStages.length)
+      );
+      preferredStage = effectiveStages[stageIdx];
     } else {
-      preferredStage = 'STAGE_4_WORSHIP_ALTAR';
+      // Mẫu 1: Chuẩn 4 giai đoạn theo tỉ lệ truyền thống (Thô 20%, Lắp ráp 30%, Hoa 25%, Lễ Phật 25%)
+      if (progressRatio <= 0.20) {
+        preferredStage = 'STAGE_1_RAW_CARPENTRY';
+      } else if (progressRatio <= 0.50) {
+        preferredStage = 'STAGE_2_ASSEMBLY_FINISHING';
+      } else if (progressRatio <= 0.75) {
+        preferredStage = 'STAGE_3_DECOR_FLOWERS';
+      } else {
+        preferredStage = 'STAGE_4_WORSHIP_ALTAR';
+      }
     }
 
-    // Tìm danh sách ứng viên từ stage ưu tiên, nếu trống thì tìm các stage lân cận
+    // Tìm danh sách ứng viên từ stage ưu tiên
     let candidates = clipsByStage[preferredStage];
     if (!candidates || candidates.length === 0) {
-      if (preferredStage === 'STAGE_1_RAW_CARPENTRY') {
-        candidates = clipsByStage['STAGE_2_ASSEMBLY_FINISHING'].length > 0
-          ? clipsByStage['STAGE_2_ASSEMBLY_FINISHING']
-          : normalizedSources;
-      } else if (preferredStage === 'STAGE_4_WORSHIP_ALTAR') {
-        candidates = clipsByStage['STAGE_3_DECOR_FLOWERS'].length > 0
-          ? clipsByStage['STAGE_3_DECOR_FLOWERS']
-          : (clipsByStage['STAGE_2_ASSEMBLY_FINISHING'].length > 0 ? clipsByStage['STAGE_2_ASSEMBLY_FINISHING'] : normalizedSources);
+      if (isCustomMode) {
+        // Với Mẫu 2: Chỉ tìm trong các stage khác thuộc effectiveStages đã chọn (lặp lại ít dùng nhất)
+        const altStage = effectiveStages.find((st) => clipsByStage[st] && clipsByStage[st].length > 0);
+        candidates = altStage ? clipsByStage[altStage] : [];
+        if (candidates.length === 0) {
+          candidates = normalizedSources; // Fallback an toàn nếu toàn bộ các stage chọn đều trống
+        }
       } else {
-        candidates = normalizedSources;
+        if (preferredStage === 'STAGE_1_RAW_CARPENTRY') {
+          candidates = clipsByStage['STAGE_2_ASSEMBLY_FINISHING'].length > 0
+            ? clipsByStage['STAGE_2_ASSEMBLY_FINISHING']
+            : normalizedSources;
+        } else if (preferredStage === 'STAGE_4_WORSHIP_ALTAR') {
+          candidates = clipsByStage['STAGE_3_DECOR_FLOWERS'].length > 0
+            ? clipsByStage['STAGE_3_DECOR_FLOWERS']
+            : (clipsByStage['STAGE_2_ASSEMBLY_FINISHING'].length > 0 ? clipsByStage['STAGE_2_ASSEMBLY_FINISHING'] : normalizedSources);
+        } else {
+          candidates = normalizedSources;
+        }
       }
     }
 
@@ -324,7 +365,11 @@ export function generateStoryline(
         last.timelineEnd = Number(targetDuration.toFixed(2));
         last.sourceDuration = Number((last.timelineEnd - last.timelineStart).toFixed(2));
       } else {
-        const nextCandidate = normalizedSources.find((s) => s.id !== last.sourceId) || normalizedSources[0];
+        const poolCandidates = isCustomMode
+          ? effectiveStages.flatMap((st) => clipsByStage[st] || [])
+          : normalizedSources;
+        const fallbackList = poolCandidates.length > 0 ? poolCandidates : normalizedSources;
+        const nextCandidate = fallbackList.find((s) => s.id !== last.sourceId) || fallbackList[0];
         const extraStart = 0;
         const extraDur = Math.max(0.5, targetDuration - last.timelineEnd);
         timelineClips.push({

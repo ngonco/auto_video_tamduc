@@ -600,7 +600,9 @@ export function segmentAndPolishSubtitles(rawWords: KaraokeWord[]): SubtitleLine
 export async function realignAndSegmentFromCustomText(
   customText: string,
   rawWords: KaraokeWord[],
-  totalDuration: number
+  totalDuration: number,
+  startOffset?: number,
+  endOffset?: number
 ): Promise<SubtitleLine[]> {
   if (!customText || !customText.trim()) {
     return [];
@@ -610,22 +612,64 @@ export async function realignAndSegmentFromCustomText(
   const tokens = cleanText.split(/\s+/).filter(Boolean);
   if (tokens.length === 0) return [];
 
-  let alignedWords: KaraokeWord[] = [];
+  const rawLines = customText.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
 
-  if (rawWords && rawWords.length > 0) {
+  // TRƯỜNG HỢP 1: Người dùng đã chủ động xuống dòng (\n):
+  // Quy tắc vàng: Mỗi dòng tương ứng CHÍNH XÁC với 1 câu phụ đề độc lập, không bị cắt vụn
+  if (rawLines.length >= 1) {
+    const lineWordsList = rawLines.map((l) => l.split(/\s+/).filter(Boolean));
+    const totalWords = lineWordsList.reduce((acc, words) => acc + words.length, 0);
+
+    // 1A. Nếu không có rawWords (nhạc nền / nhập thủ công):
+    if (!rawWords || rawWords.length === 0) {
+      const effectiveStart = Math.max(0, Number(startOffset) || 0);
+      const maxDur = totalDuration > 0 ? totalDuration : 30.0;
+      const effectiveEnd = Math.max(
+        effectiveStart + 0.5,
+        Number(endOffset) > effectiveStart ? Number(endOffset) : maxDur
+      );
+      const validDur = Math.max(0.5, effectiveEnd - effectiveStart);
+      const secPerWord = totalWords > 0 ? validDur / totalWords : 1.0;
+
+      let currentOffset = effectiveStart;
+      const lines: SubtitleLine[] = rawLines.map((lineText, lineIdx) => {
+        const lineWords = lineWordsList[lineIdx];
+        const lineDur = lineWords.length * secPerWord;
+        const lineStart = Number(currentOffset.toFixed(2));
+        const lineEnd = Number((currentOffset + lineDur).toFixed(2));
+        currentOffset += lineDur;
+
+        const words: KaraokeWord[] = lineWords.map((w, wIdx) => ({
+          word: w,
+          start: Number((lineStart + wIdx * secPerWord).toFixed(2)),
+          end: Number((lineStart + (wIdx + 1) * secPerWord).toFixed(2)),
+        }));
+
+        return {
+          id: `line_${lineIdx + 1}`,
+          start: lineStart,
+          end: lineEnd,
+          text: lineText,
+          words,
+        };
+      });
+
+      return lines;
+    }
+
+    // 1B. Nếu có rawWords (giọng đọc đã qua Whisper STT):
     const rawStart = rawWords[0].start;
     const rawEnd = Math.max(rawWords[rawWords.length - 1].end, totalDuration || rawWords[rawWords.length - 1].end);
     const totalSpan = Math.max(0.5, rawEnd - rawStart);
 
+    let alignedWords: KaraokeWord[] = [];
     if (tokens.length === rawWords.length) {
-      // 1-to-1 matching: giữ nguyên mốc thời gian của từng từ gốc
       alignedWords = tokens.map((token, idx) => ({
         word: token,
         start: rawWords[idx].start,
         end: rawWords[idx].end,
       }));
     } else {
-      // Số lượng từ thay đổi: nội suy đều thời gian theo tỷ lệ
       const wordDur = totalSpan / tokens.length;
       alignedWords = tokens.map((token, idx) => ({
         word: token,
@@ -633,18 +677,59 @@ export async function realignAndSegmentFromCustomText(
         end: Number((rawStart + (idx + 1) * wordDur).toFixed(2)),
       }));
     }
-  } else {
-    // Không có rawWords: nội suy đều trên toàn bộ totalDuration
-    const validDur = totalDuration > 0 ? totalDuration : 30.0;
+
+    // Nhóm alignedWords theo từng dòng của rawLines
+    let wordCursor = 0;
+    const lines: SubtitleLine[] = rawLines.map((lineText, lineIdx) => {
+      const lineTokens = lineWordsList[lineIdx];
+      const count = lineTokens.length;
+      const lineWords = alignedWords.slice(wordCursor, wordCursor + count);
+      wordCursor += count;
+
+      const lineStart = lineWords.length > 0 ? lineWords[0].start : 0;
+      const lineEnd = lineWords.length > 0 ? lineWords[lineWords.length - 1].end : 0;
+
+      return {
+        id: `line_${lineIdx + 1}`,
+        start: lineStart,
+        end: lineEnd,
+        text: lineText,
+        words: lineWords,
+      };
+    });
+
+    return lines;
+  }
+
+  // TRƯỜNG HỢP 2: Văn bản dán dạng khối không xuống dòng rõ ràng:
+  // Tiến hành phân dòng thông minh 3-6 từ cho 9:16
+  let alignedWords: KaraokeWord[] = [];
+  if (!rawWords || rawWords.length === 0) {
+    const effectiveStart = Math.max(0, Number(startOffset) || 0);
+    const maxDur = totalDuration > 0 ? totalDuration : 30.0;
+    const effectiveEnd = Math.max(
+      effectiveStart + 0.5,
+      Number(endOffset) > effectiveStart ? Number(endOffset) : maxDur
+    );
+    const validDur = Math.max(0.5, effectiveEnd - effectiveStart);
     const wordDur = validDur / tokens.length;
     alignedWords = tokens.map((token, idx) => ({
       word: token,
-      start: Number((idx * wordDur).toFixed(2)),
-      end: Number(((idx + 1) * wordDur).toFixed(2)),
+      start: Number((effectiveStart + idx * wordDur).toFixed(2)),
+      end: Number((effectiveStart + (idx + 1) * wordDur).toFixed(2)),
+    }));
+  } else {
+    const rawStart = rawWords[0].start;
+    const rawEnd = Math.max(rawWords[rawWords.length - 1].end, totalDuration || rawWords[rawWords.length - 1].end);
+    const totalSpan = Math.max(0.5, rawEnd - rawStart);
+    const wordDur = totalSpan / tokens.length;
+    alignedWords = tokens.map((token, idx) => ({
+      word: token,
+      start: Number((rawStart + idx * wordDur).toFixed(2)),
+      end: Number((rawStart + (idx + 1) * wordDur).toFixed(2)),
     }));
   }
 
-  // Lọc bỏ ảo giác nếu còn sót lại và phân đoạn dòng 3-6 từ
   const filteredWords = filterHallucinatedWords(alignedWords);
   return segmentAndPolishSubtitles(filteredWords);
 }

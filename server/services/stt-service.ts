@@ -14,6 +14,7 @@ export interface STTResult {
   text: string;
   duration: number;
   words: KaraokeWord[];
+  isMusic?: boolean;
 }
 
 const CACHE_DIR = path.resolve(process.cwd(), '.cache');
@@ -145,28 +146,61 @@ async function transcribeSingleAudio(audioFilePath: string): Promise<{ text: str
 }
 
 /**
- * Gọi STT 2 Lớp (Two-Pass STT Safety Engine) đảm bảo 100% không bao giờ bị thiếu phụ đề đoạn cuối
+ * Gọi STT 2 Lớp (Two-Pass STT Safety Engine) kết hợp cơ chế phòng thủ âm nhạc (Music / Non-vocal Safe Fallback)
  */
 export async function transcribeAudio(audioFilePath: string): Promise<STTResult> {
   if (!fs.existsSync(audioFilePath)) {
     throw new Error(`File âm thanh không tồn tại: ${audioFilePath}`);
   }
 
-  // 1. Pass 1: Nhận diện toàn bộ file âm thanh
-  const firstPass = await transcribeSingleAudio(audioFilePath);
-
-  let accurateDuration = firstPass.duration;
+  // 1. Luôn đo thời lượng chính xác bằng ffprobe độc lập với STT
+  let accurateDuration = 0;
   try {
     const meta = await getVideoMetadata(audioFilePath);
     if (meta.duration && meta.duration > 0) {
       accurateDuration = meta.duration;
     }
-  } catch (_) {}
+  } catch (mErr: any) {
+    console.warn('[STTService] Could not probe audio metadata:', mErr.message);
+  }
+
+  // 2. Pass 1: Nhận diện toàn bộ file âm thanh (có bọc an toàn tránh crash khi gặp nhạc không lời hoặc gateway 400)
+  let firstPass: { text: string; duration: number; words: KaraokeWord[] } = {
+    text: '',
+    duration: accurateDuration,
+    words: [],
+  };
+
+  try {
+    firstPass = await transcribeSingleAudio(audioFilePath);
+    if (!accurateDuration && firstPass.duration > 0) {
+      accurateDuration = firstPass.duration;
+    }
+  } catch (sttErr: any) {
+    console.warn(`[STTService] Transcribe failed or audio has no speech (Music/Non-vocal): ${sttErr.message}`);
+    return {
+      text: '',
+      duration: accurateDuration,
+      words: [],
+      isMusic: true,
+    };
+  }
+
+  // Nếu STT trả về text rỗng hoặc không có từ nào, trả về chế độ nhạc nền an toàn
+  if (!firstPass.text.trim() || firstPass.words.length === 0) {
+    console.log('[STTService] STT returned empty words or text. Flagging as Music / Non-speech mode.');
+    return {
+      text: '',
+      duration: accurateDuration,
+      words: [],
+      isMusic: true,
+    };
+  }
 
   let masterWords = [...firstPass.words];
   let masterText = firstPass.text;
 
-  // 2. Pass 2: Kiểm tra độ phủ âm thanh ở đoạn cuối (Tail Coverage Guard)
+  // 3. Pass 2: Kiểm tra độ phủ âm thanh ở đoạn cuối (Tail Coverage Guard)
   // Nếu file dài (> 6s) nhưng từ cuối cùng kết thúc trước mốc audio > 3.5s, kích hoạt Pass 2
   const lastWordEnd = masterWords.length > 0 ? masterWords[masterWords.length - 1].end : 0;
   const missingTailDuration = accurateDuration - lastWordEnd;
@@ -213,5 +247,6 @@ export async function transcribeAudio(audioFilePath: string): Promise<STTResult>
     text: masterText.trim(),
     duration: accurateDuration,
     words: masterWords,
+    isMusic: false,
   };
 }

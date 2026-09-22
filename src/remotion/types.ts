@@ -42,6 +42,8 @@ export interface SourceClipRecord {
   sceneDescription: string;
   thumbnailPath: string;
   mediaType?: 'video' | 'image';
+  usageCount?: number;
+  lastUsedAt?: string;
 }
 
 export interface MainVideoProps {
