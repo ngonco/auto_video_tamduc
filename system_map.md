@@ -59,10 +59,10 @@
 [ TẦNG LƯU TRỮ CỤC BỘ (Local Storage) ]
   ├── database/library.db    : SQLite Single-file (Bảng projects, video_sources, generated_videos, settings, voices)
   ├── .cache/                : Cache frames trích xuất (.cache/frames), thumbnails, uploads, render temp
-  ├── assets/fonts/          : Thư viện font tiếng Việt chuẩn (Be Vietnam Pro, Montserrat, Lexend)
+  ├── assets/fonts/          : Thư viện 6 font tiếng Việt chuẩn (Lexend, Be Vietnam Pro, Nunito, Montserrat, Inter, Quicksand - Medium/Bold/ExtraBold)
   ├── assets/bgm/            : Kho nhạc thiền Phật giáo không lời
   ├── .env                   : VILAO_STT_KEY, VILAO_SUBTITLE_KEY, VILAO_EMBEDDING_KEY, VILAO_BASE_URL, ROOT_SOURCE_DIR, EXPORT_DIR
-  └── config.json            : Cấu hình mặc định (font size, ducking volume, clip duration, defaultOutroPath, outroEnabled)
+  └── config.json            : Cấu hình mặc định (font family, font weight, all caps, font size, ducking volume, clip duration, defaultOutroPath, outroEnabled)
 =======================================================================================================
 ```
 
@@ -125,20 +125,40 @@ Tổng thời lượng Video = Thời lượng Voice chính xác (T giây từ f
         + **Xem & Sửa Từng Dòng (Line-by-line Editor)**: Cho phép sửa nhanh text từng dòng (phím Enter/Esc), gộp dòng với dòng kế tiếp, hoặc xóa hẳn dòng thừa/ảo giác chỉ với 1 click.
         + **Sửa Toàn Bộ Văn Bản (Bulk Transcript Editor)**: Cho phép biên tập lại toàn bộ nội dung bài nói trong textarea lớn và nhấn "Áp Dụng & Tự Động Phân Dòng 9:16" (`realignAndSegmentFromCustomText`).
         + **Tự Động Lưu Tức Thì (Auto-Save)**: Mọi thao tác sửa/xóa/gộp/áp dụng đều tự động lưu ngay vào bảng `voices` trong SQLite (`/api/generator/update-subtitles`).
-      - **Tầng 6 (Đồng Bộ 1:1 Tuyệt Đối Giữa Preview & Video Xuất Ra - DPI & Font Weight Calibration Engine)**:
+      - **Tầng 6 (Đồng Bộ 1:1 Tuyệt Đối Giữa Preview & Video Xuất Ra - Multi-Font, Font Weight & All-Caps Calibration Engine)**:
+        + **Bộ 6 Font Chữ Phổ Biến, Mềm Mại & Trung Tính**:
+          * `Lexend` *(Mặc định mới)*: Nét chữ mềm mại, bo nhẹ các góc, thiết kế tối ưu đọc nhanh cho video ngắn (Shorts/Reels/TikTok), không bị thô cứng.
+          * `Be Vietnam Pro`: Nét chữ chuẩn tiếng Việt, vuông vắn, trang nghiêm và đĩnh đạc.
+          * `Nunito`: Bo góc tròn mềm mại, ấm áp, trung tính, dễ nhìn trên mọi nền video.
+          * `Montserrat`: Hiện đại, đầm chắc, nét chữ rõ ràng và cân đối.
+          * `Inter`: Font chuẩn quốc tế, trung tính tối đa, hài hòa hoàn hảo.
+          * `Quicksand`: Font bo tròn mềm mại, thanh thoát, thư thái.
+        + **Tùy chọn Độ Dày Nét Chữ (Font Weight)**:
+          * `Vừa (Medium ~500)`: Nét vừa phải, thanh lịch.
+          * `Đậm (Bold ~700)` *(Mặc định mới)*: Nét dày dặn, nổi bật, dễ đọc.
+          * `Rất đậm (ExtraBold ~800)`: Nét siêu dày, tạo ấn tượng thị giác mạnh mẽ.
+        + **Chế Độ In Hoa Toàn Bộ (All-Caps Toggle)**:
+          * `[BẬT] IN HOA (UPPERCASE)` *(Mặc định mới)*: Tự động in hoa toàn bộ chữ cái để tạo điểm nhấn mạnh mẽ.
+          * `[TẮT] Tự nhiên (As-is)`: Giữ nguyên văn phong viết hoa/thường tự nhiên theo câu (ví dụ: *Nam Mô A Di Đà Phật*, chữ đầu câu viết hoa, danh từ riêng viết hoa).
         + **Quy chuẩn tỷ lệ chuyển đổi Cỡ chữ 1:1 (96 DPI CSS px ➔ 72 DPI ASS pt)**:
           * Remotion Preview chạy trên nền HTML/CSS với chuẩn màn hình **96 DPI**.
           * FFmpeg `subtitles` filter (libass + FreeType) tính toán kích thước phông chữ theo đơn vị **Typographical Points (72 DPI)**.
           * Tỷ lệ chuyển đổi chuẩn xác tuyệt đối: `calibratedAssFontSize = Math.round(fontSize * (96 / 72)) = Math.round(fontSize * 1.3333)`.
           * Tuyệt đối không truyền trực tiếp số pixel CSS vào file ASS mà không nhân hệ số 1.3333, vì nếu không chữ xuất ra trong video sẽ bị nhỏ hơn ~25-30% so với Preview.
-        + **Đồng bộ Font chữ & Độ dày (Font Weight ExtraBold 800)**:
-          * Remotion Preview dùng `fontWeight: 800` (ExtraBold).
-          * Trong file ASS gán `Fontname: Be Vietnam Pro ExtraBold` để libass nạp trực tiếp tệp `BeVietnamPro-ExtraBold.ttf` (thay vì bản Bold 700 thông thường), tạo nét chữ to đậm, chắc nịch, trang nghiêm chuẩn truyền thông Phật giáo.
-        + **Chữ hiển thị**: Viết IN HOA toàn bộ (UPPERCASE), trang nghiêm, dễ đọc.
-        + **Hiệu ứng Karaoke**: Chữ chưa đọc màu Trắng (#FFFFFF / `&H00FFFFFF`), khi giọng đọc tới đâu đổi sang màu Vàng Kim (#FFD700 / `&H0000D7FF`) tới đó kèm viền đen sắc nét (`outlineWidth = Math.max(3.5, Math.round(calibratedAssFontSize * 0.055 * 10) / 10)`) và đổ bóng sâu (`BackColour: &H90000000`, `Shadow: 2.5`).
+        + **Đồng bộ Font chữ & File TTF cục bộ (libass Font Matching)**:
+          * Hàm `getAssFontInfo(fontFamily, fontWeight)` trong `server/services/render-service.ts` tự động ánh xạ chính xác font family và style sang font TTF trong `assets/fonts/` (nạp trực tiếp `Lexend-Bold.ttf`, `Lexend-ExtraBold.ttf`, `Nunito-Bold.ttf`, `BeVietnamPro-ExtraBold.ttf`, `Montserrat-Bold.ttf`, `Inter-Bold.ttf`...).
+        + **Hiệu ứng Karaoke & Hiệu Chuẩn Viền Chữ (Typography & Stroke Calibration)**:
+          * Chữ chưa đọc màu Trắng (#FFFFFF / `&H00FFFFFF`), khi giọng đọc tới đâu đổi sang màu Vàng Kim (#FFD700 / `&H0000D7FF`) tới đó.
+          * CSS `paintOrder: 'stroke fill'`: Viền ngoài màu đen được vẽ phía sau thân chữ, kết hợp `strokeWidth = Math.max(2, Math.round(fontSize * 0.04 * 10) / 10)` (~2.6px trên 65px) và đổ bóng sâu nhiều tầng (`textShadow`). Tuyệt đối không để viền stroke lấn át lòng chữ gây đen nghẽn hay méo mó font.
+          * Trong file ASS: `outlineWidth = Math.max(3.5, Math.round(calibratedAssFontSize * 0.055 * 10) / 10)` và `BackColour: &H90000000`, `Shadow: 2.5`.
         + **Kích thước & Vị trí chuẩn**: Mặc định cỡ chữ 65px (quy đổi ASS thành 87pt), căn lề đáy 22% (~422px từ đáy 1080x1920) chuẩn safe zone 9:16.
-        + **Tùy chỉnh trực quan & Ghi nhớ vĩnh viễn (Timeline Subtitle Controls)**: Bộ thanh trượt điều chỉnh Cỡ chữ (40px - 90px) và Vị trí lề đáy (12% - 35%) ngay trên Bảng điều khiển Timeline Editor; cập nhật trực tiếp thời gian thực trên Preview và tự động lưu vào localStorage / render payload để video xuất ra khớp tuyệt đối 1:1.
-        + **Xử lý khoảng lặng**: Tự động chèn thẻ {\k<gap>} trong file ASS để khớp tuyệt đối từng nhịp ngắt nghỉ của giọng Voice.
+        + **Tùy chỉnh trực quan & Ghi nhớ vĩnh viễn (Timeline Subtitle Controls & Persistence)**:
+          * Bảng điều khiển phụ đề trực tiếp tại cả Tab `[Chỉnh Phụ Đề]` và Cột 3 Tab `[Cài Đặt Dự Án]` của Timeline Editor: Dropdown 6 font, 3 nấc độ đậm (Vừa/Đậm/Rất đậm), nút gạt In hoa toàn bộ, thanh trượt cỡ chữ (40px - 90px) và vị trí lề đáy (12% - 35%).
+          * Cập nhật thời gian thực trên Remotion Player Preview.
+          * Tự động lưu lựa chọn vào `localStorage` (`auto_video_subtitle_font_family`, `auto_video_subtitle_font_weight`, `auto_video_subtitle_all_caps`, `auto_video_subtitle_fontsize`, `auto_video_subtitle_bottom_percent`), đồng bộ vào `config.json` và lưu vào `timeline_project_json` (`subtitleStyles`) trong SQLite database (`voices`) để **tự động nhớ cho mọi video tiếp theo**.
+        + **Xử lý khoảng lặng & Chống Crash Player (Remotion Hooks Guard Rule)**:
+          * Tự động chèn thẻ {\k<gap>} trong file ASS để khớp tuyệt đối từng nhịp ngắt nghỉ của giọng Voice.
+          * Trong `KaraokeLayer.tsx`: Toàn bộ các hook `useMemo` (`numericFontWeight`, `activeLine`, `resolvedWords`, `midIndex`) được gọi vô điều kiện ở đỉnh component trước mọi câu lệnh early return. Ngăn chặn triệt để lỗi vi phạm thứ tự React Hook (`Rendered fewer hooks than expected`) làm sập Remotion Player / biến thành màn hình đen khi playhead đi qua các khoảng lặng giữa 2 câu phụ đề.
       - **Tầng 7 (Cơ Chế Phòng Thủ STT & Chế Độ Video Nhạc Nền - Music / Non-Vocal Safe Mode & Graceful Degradation)**:
         + **Đo thời lượng độc lập bằng ffprobe**: Luôn lấy thời lượng audio chính xác 100% trước hoặc độc lập với STT.
         + **Phòng thủ STT Upstream**: Khi gặp file nhạc thuần túy, nhạc thiền không lời hoặc Upstream Gateway trả về HTTP 400/500, hệ thống không throw ngoại lệ làm ngắt luồng mà tự động gán `isMusic: true`, trả về `subtitles: []` và bỏ qua bước gọi LLM sửa ngữ cảnh.
@@ -160,7 +180,11 @@ Tổng thời lượng Video = Thời lượng Voice chính xác (T giây từ f
             - Nút `[➕ Thêm]` trên Header Subtitle track: 1-click tạo ngay câu phụ đề mới tại vị trí vạch Playhead hiện tại.
             - Tay kéo 2 đầu (Left Handle xanh lá / Right Handle hổ phách) trên từng khối phụ đề để kéo co giãn `start` / `end` mượt mà bằng chuột kèm floating tooltip thời gian thực.
             - Kéo rê (Move drag) khối phụ đề để di chuyển vị trí dọc theo timeline.
-            - Tab `[💬 Chỉnh Phụ Đề]` (3-Column Subtitle Inspector) ở tầng trên: Cột 1 (Thông tin & Nút phát thử trên Remotion Player), Cột 2 (Steppers số lẻ Start/End), Cột 3 (Sửa văn bản, Nối câu tiếp theo, Xóa câu).
+            - Tab `[💬 Chỉnh Phụ Đề]` (3-Column Subtitle Inspector) ở tầng trên:
+              + Nút tab luôn sẵn sàng bấm, tự động chọn câu dưới vạch playhead hoặc câu đầu tiên nếu chưa chọn.
+              + Cột 1: Thông tin câu, bộ điều hướng nhanh `◀` / `▶` chuyển qua lại giữa các câu phụ đề, nút `[Phát Thử Câu Này Trên Player]` tức thì, và cụm chỉnh Font chữ (6 font), 3 nấc độ đậm (Vừa/Đậm/Rất đậm) cùng nút gạt `[IN HOA]`.
+              + Cột 2: Steppers số lẻ Start/End (-0.5s / +0.5s) kèm thanh input.
+              + Cột 3: Sửa văn bản câu hát, Nối câu mới ngay sau, và Xóa câu.
           * **Karaoke Tự Động Chia Nhịp**: Tự động nội suy chia đều thời gian cho các từ trong câu hát, giúp hiệu ứng Karaoke đổi màu vàng kim `#FFD700` chạy mượt mà trên Preview và khớp 100% khi render MP4 bằng FFmpeg. Cơ chế phòng thủ trong `KaraokeLayer.tsx` tự động bù đắp `words` chống crash khi phụ đề thêm thủ công.
         + **Tối Ưu Hóa Render**: Render Engine tự động bỏ qua filter `subtitles=...` của FFmpeg khi `subtitles.length === 0`, tăng tốc độ xuất video và tránh mọi lỗi libass khi không có phụ đề.
   3. Storyline & Clip Duration Engine (Chuẩn 4.0s - 5.5s, 2 Mẫu Ghép Kịch Bản & 2 Chế Độ Lắp Ráp Nguồn):
@@ -316,7 +340,7 @@ CREATE TABLE voices (
 | `POST` | `/api/generator/assemble-storyline`| `{ targetDuration, mode?: 'single' \| 'all', projectId?, pattern?: 'standard_4_stages' \| 'custom_stages', selectedStages?: string[], outro? }` | Tự động phân bổ clip theo 2 Mẫu kịch bản: Mẫu 1 (Chuẩn 4 giai đoạn) hoặc Mẫu 2 (Tùy chọn 1 hoặc nhiều giai đoạn, lặp lại clip ít dùng nhất khi thiếu) |
 | `GET` | `/api/generator/library-summary` | - | Lấy thống kê tổng quan thư viện (tổng số công trình, clips, thời lượng) |
 | `GET` | `/api/generator/bgm-list` | - | Lấy danh sách nhạc thiền BGM |
-| `POST` | `/api/render/start` | `{ videoId, projectName, voicePath, clips, subtitles, subtitleFontSize?, subtitleBottomPercent?, outroPath, outroEnabled, outroDuration }` | Bắt đầu Render video MP4 1080x1920 qua FFmpeg (kèm đồng bộ size phụ đề ASS & Outro unmuted audio & BGM fade-out) |
+| `POST` | `/api/render/start` | `{ videoId, projectName, voicePath, clips, subtitles, subtitleFontSize?, subtitleBottomPercent?, fontFamily?, fontWeight?, allCaps?, outroPath, outroEnabled, outroDuration }` | Bắt đầu Render video MP4 1080x1920 qua FFmpeg (kèm đồng bộ size & font phụ đề ASS & Outro unmuted audio & BGM fade-out) |
 | `GET` | `/api/render/download?path=...` | `path` | Tải trực tiếp file video xuất ra (.mp4) về máy tính qua HTTP download stream |
 | `GET` | `/api/render/status/:jobId` | - | Lấy tiến độ % render (0 - 100%) và đường dẫn file output chính xác |
 | `POST` | `/api/render/open-folder` | `{ filePath: string }` | Mở thư mục chứa video trên Windows Explorer (và tự động highlight chọn file video vừa xuất) |
@@ -387,7 +411,7 @@ Auto_Video_TamDuc/
 │           └── AudioLayer.tsx  # Voice + BGM Ducking
 │
 ├── assets/                     # Tài nguyên nội bộ
-│   ├── fonts/                  # Fonts Be Vietnam Pro, Montserrat
+│   ├── fonts/                  # Thư viện 6 fonts tiếng Việt (Lexend, Be Vietnam Pro, Nunito, Montserrat, Inter, Quicksand)
 │   └── bgm/                    # Nhạc thiền Phật giáo
 ├── sample_sources/             # Thư mục mẫu các công trình
 └── exports/                    # Thư mục xuất video MP4
@@ -581,14 +605,14 @@ Hệ thống đã tạo sẵn bộ công cụ sao lưu tự động toàn bộ m
          const calibratedFontSize = Math.round((fontSize || 65) * (96 / 72)); // 65px CSS ➔ 87pt ASS
          ```
        - Mọi mức thanh trượt từ 40px - 90px đều được ánh xạ 1:1 chuẩn xác từng pixel (40px ➔ 53pt, 50px ➔ 67pt, 65px ➔ 87pt, 75px ➔ 100pt, 85px ➔ 113pt, 90px ➔ 120pt).
-    2. **Đồng bộ phông chữ ExtraBold 800**:
-       - Tự động gán `Fontname: Be Vietnam Pro ExtraBold` trong ASS Style để nạp trực tiếp `BeVietnamPro-ExtraBold.ttf` từ thư mục `assets/fonts/`.
+    2. **Đồng bộ phông chữ & Độ dày (Multi-Font & Weight Matching)**:
+       - Tự động gọi hàm `getAssFontInfo(fontFamily, fontWeight)` trong `server/services/render-service.ts` để ánh xạ chính xác font name và cờ `Bold` tương ứng trong ASS Style, nạp trực tiếp các tệp `.ttf` từ `assets/fonts/` (hỗ trợ `Lexend`, `Be Vietnam Pro`, `Nunito`, `Montserrat`, `Inter`, `Quicksand` ở các mức `normal`, `bold`, `extraBold`).
     3. **Tối ưu độ dày viền chữ và bóng đổ**:
        - Viền đen tự động co giãn: `outlineWidth = Math.max(3.5, Math.round(calibratedAssFontSize * 0.055 * 10) / 10)`.
        - Đổ bóng sâu `Shadow: 2.5` với độ mờ `&H90000000`, đảm bảo phụ đề nổi bật trên mọi nền cảnh sáng/tối.
     4. **Căn lề đáy Safe Zone 9:16**:
        - `MarginV = Math.round(1920 * (bottomPercent / 100))` khớp chính xác 100% với vị trí `bottom: ${positionBottomPercent}%` của Remotion Preview.
-  - **LƯU Ý QUAN TRỌNG DÀNH CHO DEVELOPER & AI AGENT**: Tuyệt đối không bao giờ bỏ hệ số `96/72` khi sinh file ASS cho FFmpeg, và luôn đảm bảo file ASS chỉ định đúng font `Be Vietnam Pro ExtraBold` để bảo toàn độ to rõ và trang nghiêm của video xuất ra.
+  - **LƯU Ý QUAN TRỌNG DÀNH CHO DEVELOPER & AI AGENT**: Tuyệt đối không bao giờ bỏ hệ số `96/72` khi sinh file ASS cho FFmpeg, và luôn đảm bảo file ASS chỉ định đúng font name và weight qua `getAssFontInfo` để bảo toàn độ to rõ, nét dày và chuẩn mỹ thuật của video xuất ra.
 - **Quản Lý Trạng Thái Đã Xuất Video & Xuất Video Hàng Loạt (Batch Export & Status Management Engine)**:
   - **Mục tiêu**: Cho phép người dùng sau khi nạp voice và tinh chỉnh kịch bản timeline có thể để dành dồn lại và xuất hàng loạt nhiều video cùng một lúc thay vì phải ngồi chờ xuất từng video một.
   - **Quản lý trạng thái xuất video thời gian thực (`is_exported` & `export_info`)**:

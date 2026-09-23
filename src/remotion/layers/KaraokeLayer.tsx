@@ -1,10 +1,12 @@
 import React from 'react';
 import { useCurrentFrame, useVideoConfig } from 'remotion';
-import { SubtitleLine } from '../types.js';
+import { SubtitleLine, SubtitleFontWeight } from '../types.js';
 
 interface KaraokeLayerProps {
   subtitles: SubtitleLine[];
   fontFamily?: string;
+  fontWeight?: SubtitleFontWeight;
+  allCaps?: boolean;
   activeColor?: string;
   inactiveColor?: string;
   fontSize?: number;
@@ -13,7 +15,9 @@ interface KaraokeLayerProps {
 
 export const KaraokeLayer: React.FC<KaraokeLayerProps> = ({
   subtitles,
-  fontFamily = 'Be Vietnam Pro',
+  fontFamily = 'Lexend',
+  fontWeight = 'bold',
+  allCaps = true,
   activeColor = '#FFD700',
   inactiveColor = '#FFFFFF',
   fontSize = 65,
@@ -23,16 +27,30 @@ export const KaraokeLayer: React.FC<KaraokeLayerProps> = ({
   const { fps, width } = useVideoConfig();
   const currentTime = frame / fps;
 
-  // Tính độ dày viền chữ tỉ lệ theo cỡ chữ (khoảng 7% cỡ chữ, tối thiểu 3px)
-  const strokeWidth = Math.max(3, Math.round(fontSize * 0.07 * 10) / 10);
-  const activeStrokeWidth = Math.round((strokeWidth + 0.5) * 10) / 10;
+  // 1. Ánh xạ độ đậm font weight sang giá trị số CSS (Hook đặt ở ĐẦU component, KHÔNG BAO GIỜ BỊ BỎ QUA)
+  const numericFontWeight = React.useMemo(() => {
+    switch (fontWeight) {
+      case 'normal':
+        return 500;
+      case 'extraBold':
+        return 800;
+      case 'bold':
+      default:
+        return 700;
+    }
+  }, [fontWeight]);
 
-  // Tìm câu phụ đề đang hiển thị
-  const activeLine = subtitles.find(
-    (line) => currentTime >= line.start - 0.1 && currentTime <= line.end + 0.2
-  );
+  // 2. Tìm câu phụ đề đang hiển thị (Hook useMemo luôn chạy mỗi frame)
+  const activeLine = React.useMemo(() => {
+    if (!subtitles || subtitles.length === 0) return null;
+    return (
+      subtitles.find(
+        (line) => currentTime >= line.start - 0.05 && currentTime <= line.end + 0.1
+      ) || null
+    );
+  }, [subtitles, currentTime]);
 
-  // Đảm bảo an toàn 100% nếu activeLine.words bị thiếu hoặc rỗng (phụ đề thủ công)
+  // 3. Đảm bảo an toàn 100% nếu activeLine.words bị thiếu hoặc rỗng (Hook useMemo luôn chạy mỗi frame)
   const resolvedWords = React.useMemo(() => {
     if (!activeLine) return [];
     if (activeLine.words && activeLine.words.length > 0) {
@@ -50,13 +68,23 @@ export const KaraokeLayer: React.FC<KaraokeLayerProps> = ({
     }));
   }, [activeLine]);
 
+  // 4. Chia 2 hàng cân đối nếu câu dài (> 6 từ hoặc > 28 ký tự)
+  const midIndex = React.useMemo(() => {
+    if (!activeLine || resolvedWords.length <= 6) return -1;
+    const shouldWrap = resolvedWords.length > 6 || (activeLine.text && activeLine.text.length > 28);
+    return shouldWrap ? Math.ceil(resolvedWords.length / 2) : -1;
+  }, [activeLine, resolvedWords]);
+
+  // 5. Tính độ dày viền chữ chuẩn xác:
+  // Viền đen thanh thoát, kết hợp với paintOrder: 'stroke fill' để viền vẽ PHÍA SAU,
+  // tuyệt đối không đè đen vào thân chữ hay làm đen chữ trắng/vàng
+  const strokeWidth = Math.max(2, Math.round(fontSize * 0.04 * 10) / 10);
+  const activeStrokeWidth = Math.round((strokeWidth + 0.6) * 10) / 10;
+
+  // 6. KIỂM TRA SỚM SAU KHI TẤT CẢ HOOKS ĐÃ CHẠY XONG (Không bao giờ vi phạm React Hooks rules)
   if (!activeLine || resolvedWords.length === 0) {
     return null;
   }
-
-  // Chia 2 hàng cân đối nếu câu dài (> 6 từ hoặc > 28 ký tự)
-  const shouldWrapBalanced = resolvedWords.length > 6 || (activeLine.text && activeLine.text.length > 28);
-  const midIndex = shouldWrapBalanced ? Math.ceil(resolvedWords.length / 2) : -1;
 
   return (
     <div
@@ -78,10 +106,10 @@ export const KaraokeLayer: React.FC<KaraokeLayerProps> = ({
         style={{
           fontFamily: `"${fontFamily}", sans-serif`,
           fontSize: fontSize,
-          fontWeight: 800,
+          fontWeight: numericFontWeight,
           textAlign: 'center',
           lineHeight: 1.35,
-          textTransform: 'uppercase',
+          textTransform: allCaps ? 'uppercase' : 'none',
           letterSpacing: '0.5px',
           display: 'flex',
           flexWrap: 'wrap',
@@ -96,13 +124,13 @@ export const KaraokeLayer: React.FC<KaraokeLayerProps> = ({
 
           let color = inactiveColor;
           let scale = 1;
-          let shadow = '0 3px 12px rgba(0, 0, 0, 0.95)';
+          let shadow = '0 2px 8px rgba(0, 0, 0, 0.9)';
           let stroke = `${strokeWidth}px #000000`;
 
           if (isCurrent) {
             color = activeColor; // Vàng kim hoàng gia
             scale = 1.08;
-            shadow = `0 0 20px rgba(255, 215, 0, 0.9), 0 3px 12px rgba(0, 0, 0, 0.95)`;
+            shadow = `0 0 20px rgba(255, 215, 0, 0.9), 0 2px 8px rgba(0, 0, 0, 0.95)`;
             stroke = `${activeStrokeWidth}px #000000`;
           } else if (isPassed) {
             color = activeColor; // Vàng kim (đã hoàn thành karaoke)
@@ -116,8 +144,9 @@ export const KaraokeLayer: React.FC<KaraokeLayerProps> = ({
                 style={{
                   color: color,
                   transform: `scale(${scale})`,
-                  transition: 'all 0.1s ease',
+                  transition: 'transform 0.1s ease, color 0.1s ease',
                   WebkitTextStroke: stroke,
+                  paintOrder: 'stroke fill',
                   textShadow: shadow,
                   display: 'inline-block',
                 }}

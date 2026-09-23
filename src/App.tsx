@@ -29,6 +29,9 @@ interface ActiveTimelineState {
   subtitleStyles?: {
     fontSize: number;
     bottomPercent: number;
+    fontFamily?: string;
+    fontWeight?: 'normal' | 'bold' | 'extraBold';
+    allCaps?: boolean;
   };
 }
 

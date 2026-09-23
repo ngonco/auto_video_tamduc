@@ -12,7 +12,9 @@ export const MainVideo: React.FC<MainVideoProps> = ({
   bgmUrl,
   voiceVolume = 1.0,
   bgmVolume = 0.15,
-  fontFamily = 'Be Vietnam Pro',
+  fontFamily = 'Lexend',
+  fontWeight = 'bold',
+  allCaps = true,
   activeWordColor = '#FFD700',
   inactiveWordColor = '#FFFFFF',
   fontSize,
@@ -28,6 +30,8 @@ export const MainVideo: React.FC<MainVideoProps> = ({
       <KaraokeLayer
         subtitles={subtitles}
         fontFamily={fontFamily}
+        fontWeight={fontWeight}
+        allCaps={allCaps}
         activeColor={activeWordColor}
         inactiveColor={inactiveWordColor}
         fontSize={fontSize}

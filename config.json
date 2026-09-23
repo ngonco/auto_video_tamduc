@@ -15,7 +15,9 @@
     "outroEnabled": true,
     "outroDuration": 2.6,
     "karaoke": {
-      "fontFamily": "Be Vietnam Pro",
+      "fontFamily": "Lexend",
+      "fontWeight": "bold",
+      "allCaps": true,
       "fontSize": 65,
       "inactiveColor": "#FFFFFF",
       "activeColor": "#FFD700",

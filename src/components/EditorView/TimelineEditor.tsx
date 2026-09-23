@@ -51,7 +51,16 @@ import {
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { MainVideo } from '../../remotion/MainVideo.js';
-import { MainVideoProps, SubtitleLine, TimelineClipItem, SourceClipRecord } from '../../remotion/types.js';
+import { MainVideoProps, SubtitleLine, TimelineClipItem, SourceClipRecord, SubtitleFontWeight } from '../../remotion/types.js';
+
+export const SUBTITLE_FONTS = [
+  { id: 'Lexend', name: 'Lexend', desc: 'Mềm mại, tối ưu đọc phụ đề' },
+  { id: 'Be Vietnam Pro', name: 'Be Vietnam Pro', desc: 'Chuẩn tiếng Việt, trang nghiêm' },
+  { id: 'Nunito', name: 'Nunito', desc: 'Bo tròn ấm áp, trung tính' },
+  { id: 'Montserrat', name: 'Montserrat', desc: 'Hiện đại, đầm chắc, rõ nét' },
+  { id: 'Inter', name: 'Inter', desc: 'Chuẩn quốc tế, trung tính tối đa' },
+  { id: 'Quicksand', name: 'Quicksand', desc: 'Mềm mại thanh thoát, thư thái' },
+];
 
 interface TimelineEditorProps {
   timelineData: {
@@ -77,6 +86,9 @@ interface TimelineEditorProps {
     subtitleStyles?: {
       fontSize: number;
       bottomPercent: number;
+      fontFamily?: string;
+      fontWeight?: SubtitleFontWeight;
+      allCaps?: boolean;
     };
   };
   onUpdateClips: (clips: TimelineClipItem[]) => void;
@@ -285,7 +297,7 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
     currentEnd: number;
   } | null>(null);
 
-  // Subtitle custom size & position state (khôi phục từ timelineData nếu có)
+  // Subtitle custom size, position & font styles state (khôi phục từ timelineData nếu có, hoặc localStorage, hoặc mặc định)
   const [subtitleFontSize, setSubtitleFontSize] = useState<number>(() => {
     if (timelineData.subtitleStyles?.fontSize) return timelineData.subtitleStyles.fontSize;
     const saved = localStorage.getItem('auto_video_subtitle_fontsize');
@@ -295,6 +307,21 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
     if (timelineData.subtitleStyles?.bottomPercent) return timelineData.subtitleStyles.bottomPercent;
     const saved = localStorage.getItem('auto_video_subtitle_bottom_percent');
     return saved ? Number(saved) : 22;
+  });
+  const [subtitleFontFamily, setSubtitleFontFamily] = useState<string>(() => {
+    if (timelineData.subtitleStyles?.fontFamily) return timelineData.subtitleStyles.fontFamily;
+    const saved = localStorage.getItem('auto_video_subtitle_font_family');
+    return saved || 'Lexend';
+  });
+  const [subtitleFontWeight, setSubtitleFontWeight] = useState<SubtitleFontWeight>(() => {
+    if (timelineData.subtitleStyles?.fontWeight) return timelineData.subtitleStyles.fontWeight;
+    const saved = localStorage.getItem('auto_video_subtitle_font_weight');
+    return (saved as SubtitleFontWeight) || 'bold';
+  });
+  const [subtitleAllCaps, setSubtitleAllCaps] = useState<boolean>(() => {
+    if (timelineData.subtitleStyles?.allCaps !== undefined) return timelineData.subtitleStyles.allCaps;
+    const saved = localStorage.getItem('auto_video_subtitle_all_caps');
+    return saved !== null ? saved === 'true' : true;
   });
 
   const handleFontSizeChange = (size: number) => {
@@ -309,11 +336,32 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
     localStorage.setItem('auto_video_subtitle_bottom_percent', String(clamped));
   };
 
+  const handleFontFamilyChange = (font: string) => {
+    setSubtitleFontFamily(font);
+    localStorage.setItem('auto_video_subtitle_font_family', font);
+  };
+
+  const handleFontWeightChange = (weight: SubtitleFontWeight) => {
+    setSubtitleFontWeight(weight);
+    localStorage.setItem('auto_video_subtitle_font_weight', weight);
+  };
+
+  const handleAllCapsChange = (allCaps: boolean) => {
+    setSubtitleAllCaps(allCaps);
+    localStorage.setItem('auto_video_subtitle_all_caps', String(allCaps));
+  };
+
   const handleResetSubtitleStyles = () => {
     setSubtitleFontSize(65);
     setSubtitleBottomPercent(22);
+    setSubtitleFontFamily('Lexend');
+    setSubtitleFontWeight('bold');
+    setSubtitleAllCaps(true);
     localStorage.setItem('auto_video_subtitle_fontsize', '65');
     localStorage.setItem('auto_video_subtitle_bottom_percent', '22');
+    localStorage.setItem('auto_video_subtitle_font_family', 'Lexend');
+    localStorage.setItem('auto_video_subtitle_font_weight', 'bold');
+    localStorage.setItem('auto_video_subtitle_all_caps', 'true');
   };
 
   // Selected clip state
@@ -552,6 +600,9 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
         subtitleStyles: {
           fontSize: subtitleFontSize,
           bottomPercent: subtitleBottomPercent,
+          fontFamily: subtitleFontFamily,
+          fontWeight: subtitleFontWeight,
+          allCaps: subtitleAllCaps,
         },
       };
 
@@ -598,6 +649,9 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
     voiceVolume,
     subtitleFontSize,
     subtitleBottomPercent,
+    subtitleFontFamily,
+    subtitleFontWeight,
+    subtitleAllCaps,
     showToast,
   ]);
 
@@ -1940,6 +1994,9 @@ export const TimelineEditor: React.FC<TimelineEditorProps> = ({
           subtitles: timelineData.subtitles,
           subtitleFontSize,
           subtitleBottomPercent,
+          fontFamily: subtitleFontFamily,
+          fontWeight: subtitleFontWeight,
+          allCaps: subtitleAllCaps,
           outroPath: isOutroActive ? outroPath : undefined,
           outroEnabled: isOutroActive,
           outroDuration: isOutroActive ? outroDuration : 0,
@@ -2072,7 +2129,9 @@ sourceDuration: Number(outroDuration.toFixed(2)),
       bgmUrl: selectedBgm ? `/media/bgm/${selectedBgm.split(/[\\/]/).pop()}` : undefined,
       voiceVolume,
       bgmVolume,
-      fontFamily: 'Be Vietnam Pro',
+      fontFamily: subtitleFontFamily,
+      fontWeight: subtitleFontWeight,
+      allCaps: subtitleAllCaps,
       activeWordColor: '#FFD700',
       inactiveWordColor: '#FFFFFF',
       fontSize: subtitleFontSize,
@@ -2091,6 +2150,9 @@ sourceDuration: Number(outroDuration.toFixed(2)),
       selectedBgm,
       voiceVolume,
       bgmVolume,
+      subtitleFontFamily,
+      subtitleFontWeight,
+      subtitleAllCaps,
       subtitleFontSize,
       subtitleBottomPercent,
       voiceDuration,
@@ -2113,10 +2175,17 @@ sourceDuration: Number(outroDuration.toFixed(2)),
               onClick={() => {
                 setActiveRightTab('clip');
                 setSelectedSubId(null);
+                if (!selectedClipId && timelineData.clips.length > 0) {
+                  const curTimeSec = currentFrame / fps;
+                  const curClip = timelineData.clips.find(
+                    (c) => curTimeSec >= c.timelineStart && curTimeSec <= c.timelineEnd
+                  ) || timelineData.clips[0];
+                  setSelectedClipId(curClip.id);
+                }
               }}
-              disabled={!selectedClipId}
+              disabled={timelineData.clips.length === 0}
               className={`py-1.5 px-3 rounded-lg text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
-                activeRightTab === 'clip' && selectedClipId
+                activeRightTab === 'clip'
                   ? 'bg-amber-500 text-slate-950 shadow-md shadow-amber-500/20'
                   : 'bg-slate-850 text-slate-400 hover:text-slate-200 border border-slate-700 disabled:opacity-40 disabled:cursor-not-allowed'
               }`}
@@ -2134,10 +2203,17 @@ sourceDuration: Number(outroDuration.toFixed(2)),
               onClick={() => {
                 setActiveRightTab('subtitle');
                 setSelectedClipId(null);
+                if (!selectedSubId && timelineData.subtitles.length > 0) {
+                  const curTimeSec = currentFrame / fps;
+                  const curSub = timelineData.subtitles.find(
+                    (s) => curTimeSec >= s.start && curTimeSec <= s.end
+                  ) || timelineData.subtitles[0];
+                  setSelectedSubId(curSub.id);
+                }
               }}
-              disabled={!selectedSubId}
+              disabled={timelineData.subtitles.length === 0}
               className={`py-1.5 px-3 rounded-lg text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
-                activeRightTab === 'subtitle' && selectedSubId
+                activeRightTab === 'subtitle'
                   ? 'bg-yellow-400 text-slate-950 shadow-md shadow-yellow-400/20'
                   : 'bg-slate-850 text-slate-400 hover:text-slate-200 border border-slate-700 disabled:opacity-40 disabled:cursor-not-allowed'
               }`}
@@ -2158,7 +2234,7 @@ sourceDuration: Number(outroDuration.toFixed(2)),
                 setSelectedSubId(null);
               }}
               className={`py-1.5 px-3 rounded-lg text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
-                activeRightTab === 'project' || (!selectedClipId && !selectedSubId)
+                activeRightTab === 'project'
                   ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40 shadow-xs'
                   : 'bg-slate-850 text-slate-400 hover:text-slate-200 border border-slate-700'
               }`}
@@ -2205,9 +2281,17 @@ sourceDuration: Number(outroDuration.toFixed(2)),
         {/* ─── TẦNG TRÊN BÊN TRÁI: LƯỚI 3 CỘT THÔNG MINH ─── */}
         <div className="flex-1 p-3 overflow-y-auto custom-scrollbar min-h-0 bg-[#0E1524]">
           {/* TAB 1: CLIP INSPECTOR (LƯỚI 3 CỘT) */}
-          {activeRightTab === 'clip' && selectedClipId && (() => {
-            const selIdx = timelineData.clips.findIndex((c) => c.id === selectedClipId);
-            if (selIdx === -1) return null;
+          {activeRightTab === 'clip' && (() => {
+            if (timelineData.clips.length === 0) {
+              return (
+                <div className="flex flex-col items-center justify-center p-8 text-center bg-slate-900/60 rounded-xl border border-slate-800">
+                  <Sliders className="w-8 h-8 text-slate-500 mb-2" />
+                  <p className="text-sm font-semibold text-slate-300">Chưa có clip nào trong timeline</p>
+                </div>
+              );
+            }
+            let selIdx = timelineData.clips.findIndex((c) => c.id === selectedClipId);
+            if (selIdx === -1) selIdx = 0;
             const selClip = timelineData.clips[selIdx];
             const srcMatch = localAvailableSources.find((p) => p.id === selClip.sourceId || p.filePath === selClip.filePath);
             const isImg = selClip.mediaType === 'image' || isImageFile(selClip.filePath);
@@ -2437,21 +2521,63 @@ sourceDuration: Number(outroDuration.toFixed(2)),
           })()}
 
           {/* TAB 2: SUBTITLE INSPECTOR (LƯỚI 3 CỘT) */}
-          {activeRightTab === 'subtitle' && selectedSubId && (() => {
-            const selSubIdx = timelineData.subtitles.findIndex((s) => s.id === selectedSubId);
-            if (selSubIdx === -1) return null;
+          {activeRightTab === 'subtitle' && (() => {
+            if (timelineData.subtitles.length === 0) {
+              return (
+                <div className="flex flex-col items-center justify-center p-8 text-center bg-slate-900/60 rounded-xl border border-slate-800">
+                  <Type className="w-8 h-8 text-slate-500 mb-2" />
+                  <p className="text-sm font-semibold text-slate-300">Chưa có dòng phụ đề nào</p>
+                  <p className="text-xs text-slate-500 mt-1">Dự án chưa có phụ đề.</p>
+                </div>
+              );
+            }
+            let selSubIdx = timelineData.subtitles.findIndex((s) => s.id === selectedSubId);
+            if (selSubIdx === -1) selSubIdx = 0;
             const selSub = timelineData.subtitles[selSubIdx];
             const dur = Math.max(0, selSub.end - selSub.start);
 
             return (
               <div className="grid grid-cols-3 gap-3 h-full min-h-[185px]">
-                {/* CỘT 1: THÔNG TIN CÂU & PREVIEW PHÁT */}
+                {/* CỘT 1: THÔNG TIN CÂU & PREVIEW PHÁT & CHỌN FONT */}
                 <div className="p-3 bg-slate-900/90 border border-yellow-500/30 rounded-xl flex flex-col justify-between shadow-sm">
                   <div className="space-y-1.5">
                     <div className="flex items-center justify-between">
-                      <span className="px-2 py-0.5 rounded-md bg-yellow-400 text-slate-950 font-mono font-extrabold text-xs">
-                        Câu #{selSubIdx + 1}
-                      </span>
+                      <div className="flex items-center gap-1.5">
+                        <span className="px-2 py-0.5 rounded-md bg-yellow-400 text-slate-950 font-mono font-extrabold text-xs">
+                          Câu #{selSubIdx + 1}
+                        </span>
+                        <div className="flex items-center gap-1 ml-1">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (selSubIdx > 0) {
+                                setSelectedSubId(timelineData.subtitles[selSubIdx - 1].id);
+                              }
+                            }}
+                            disabled={selSubIdx <= 0}
+                            className="px-1.5 py-0.5 bg-slate-800 hover:bg-slate-700 disabled:opacity-30 text-slate-300 text-[10px] font-bold rounded cursor-pointer"
+                            title="Câu trước"
+                          >
+                            ◀
+                          </button>
+                          <span className="text-[10px] font-mono text-slate-400">
+                            {selSubIdx + 1}/{timelineData.subtitles.length}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (selSubIdx < timelineData.subtitles.length - 1) {
+                                setSelectedSubId(timelineData.subtitles[selSubIdx + 1].id);
+                              }
+                            }}
+                            disabled={selSubIdx >= timelineData.subtitles.length - 1}
+                            className="px-1.5 py-0.5 bg-slate-800 hover:bg-slate-700 disabled:opacity-30 text-slate-300 text-[10px] font-bold rounded cursor-pointer"
+                            title="Câu tiếp theo"
+                          >
+                            ▶
+                          </button>
+                        </div>
+                      </div>
                       <span className="text-[10px] font-mono text-yellow-300 bg-yellow-950/60 px-2 py-0.5 rounded border border-yellow-500/30">
                         ⏱️ {dur.toFixed(1)}s • {selSub.words?.length || 0} từ
                       </span>
@@ -2461,18 +2587,94 @@ sourceDuration: Number(outroDuration.toFixed(2)),
                     </p>
                   </div>
 
-                  {/* Nút phát thử câu trên Player */}
-                  <div className="space-y-2 mt-2">
+                  {/* Nút phát thử câu trên Player & Tùy biến Font trực tiếp */}
+                  <div className="space-y-1.5 mt-2">
                     <button
                       type="button"
                       onClick={() => handlePlaySubtitlePreview(selSub.start)}
-                      className="w-full py-2 bg-gradient-to-r from-amber-500 to-yellow-500 hover:from-amber-400 hover:to-yellow-400 text-slate-950 font-bold rounded-lg text-xs flex items-center justify-center gap-1.5 transition shadow-sm cursor-pointer"
+                      className="w-full py-1.5 bg-gradient-to-r from-amber-500 to-yellow-500 hover:from-amber-400 hover:to-yellow-400 text-slate-950 font-bold rounded-lg text-xs flex items-center justify-center gap-1.5 transition shadow-sm cursor-pointer active:scale-98"
                     >
                       <Play className="w-3.5 h-3.5 fill-slate-950" />
                       <span>Phát Thử Câu Này Trên Player</span>
                     </button>
-                    <div className="text-[9.5px] text-slate-400 text-center font-mono">
-                      Cỡ chữ ASS: {subtitleFontSize}px • Lề đáy: {subtitleBottomPercent}%
+
+                    {/* Font & Kiểu Dáng chữ phụ đề */}
+                    <div className="p-1.5 bg-slate-950/80 border border-slate-800 rounded-lg space-y-1">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[9.5px] font-bold text-amber-400 flex items-center gap-1">
+                          <Type className="w-3 h-3" />
+                          Font Chữ & Kiểu Dáng
+                        </span>
+                        <button
+                          type="button"
+                          onClick={handleResetSubtitleStyles}
+                          className="text-[8.5px] text-slate-400 hover:text-amber-300 underline cursor-pointer"
+                        >
+                          Mặc định
+                        </button>
+                      </div>
+
+                      <select
+                        value={subtitleFontFamily}
+                        onChange={(e) => handleFontFamilyChange(e.target.value)}
+                        className="w-full bg-slate-900 border border-slate-700 text-slate-200 text-[10px] rounded px-1.5 py-0.5 outline-none focus:border-amber-500 font-sans"
+                      >
+                        {SUBTITLE_FONTS.map((font) => (
+                          <option key={font.id} value={font.id}>
+                            {font.name} — {font.desc}
+                          </option>
+                        ))}
+                      </select>
+
+                      <div className="flex items-center gap-1 text-[9px]">
+                        <div className="flex items-center bg-slate-900 border border-slate-700 rounded p-0.5">
+                          <button
+                            type="button"
+                            onClick={() => handleFontWeightChange('normal')}
+                            className={`px-1.5 py-0.5 rounded cursor-pointer ${
+                              subtitleFontWeight === 'normal'
+                                ? 'bg-amber-500 text-slate-950 font-bold'
+                                : 'text-slate-400 hover:text-slate-200'
+                            }`}
+                          >
+                            Vừa
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleFontWeightChange('bold')}
+                            className={`px-1.5 py-0.5 rounded cursor-pointer ${
+                              subtitleFontWeight === 'bold'
+                                ? 'bg-amber-500 text-slate-950 font-bold'
+                                : 'text-slate-400 hover:text-slate-200'
+                            }`}
+                          >
+                            Đậm
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleFontWeightChange('extraBold')}
+                            className={`px-1.5 py-0.5 rounded cursor-pointer ${
+                              subtitleFontWeight === 'extraBold'
+                                ? 'bg-amber-500 text-slate-950 font-bold'
+                                : 'text-slate-400 hover:text-slate-200'
+                            }`}
+                          >
+                            Rất đậm
+                          </button>
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={() => handleAllCapsChange(!subtitleAllCaps)}
+                          className={`flex-1 py-0.5 px-1 rounded font-bold border cursor-pointer text-center truncate ${
+                            subtitleAllCaps
+                              ? 'bg-amber-500/20 border-amber-500/50 text-amber-300'
+                              : 'bg-slate-900 border-slate-700 text-slate-400'
+                          }`}
+                        >
+                          {subtitleAllCaps ? '🔠 IN HOA' : '🔡 Tự nhiên'}
+                        </button>
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -2621,7 +2823,7 @@ sourceDuration: Number(outroDuration.toFixed(2)),
           })()}
 
           {/* TAB 3: PROJECT SETTINGS (LƯỚI 3 CỘT) */}
-          {(activeRightTab === 'project' || (!selectedClipId && !selectedSubId)) && (
+          {(activeRightTab === 'project' || (!selectedClipId && !selectedSubId && activeRightTab !== 'subtitle' && activeRightTab !== 'clip')) && (
             <div className="grid grid-cols-3 gap-3 h-full min-h-[185px]">
               {/* CỘT 1: THÔNG TIN CÔNG TRÌNH & VOICE AUDIO */}
               <div className="p-3 bg-slate-900/90 border border-slate-800 rounded-xl flex flex-col justify-between shadow-sm">
@@ -2707,40 +2909,128 @@ sourceDuration: Number(outroDuration.toFixed(2)),
               {/* CỘT 3: PHỤ ĐỀ KARAOKE & OUTRO CUỐI VIDEO */}
               <div className="p-3 bg-slate-900/90 border border-slate-800 rounded-xl flex flex-col justify-between shadow-sm space-y-2">
                 {/* Phụ đề */}
-                <div className="space-y-1.5">
+                <div className="space-y-2">
                   <div className="flex items-center justify-between">
                     <span className="text-xs font-bold text-amber-300 flex items-center gap-1.5">
                       <Type className="w-3.5 h-3.5 text-amber-400" />
-                      Phụ Đề ({subtitleFontSize}px • {subtitleBottomPercent}%)
+                      Phụ Đề ({subtitleFontSize}px • Đáy {subtitleBottomPercent}%)
                     </span>
                     <button
                       onClick={handleResetSubtitleStyles}
                       className="text-[9px] text-slate-400 hover:text-amber-300 underline cursor-pointer"
+                      title="Khôi phục font và kiểu dáng phụ đề về mặc định (Lexend, Đậm, In hoa)"
                     >
                       Mặc định
                     </button>
                   </div>
-                  <div className="grid grid-cols-2 gap-2">
-                    <input
-                      type="range"
-                      min="40"
-                      max="90"
-                      step="1"
-                      value={subtitleFontSize}
-                      onChange={(e) => handleFontSizeChange(parseInt(e.target.value, 10))}
-                      className="w-full accent-amber-500 h-1 bg-slate-800 rounded cursor-pointer"
-                      title="Cỡ chữ"
-                    />
-                    <input
-                      type="range"
-                      min="12"
-                      max="35"
-                      step="1"
-                      value={subtitleBottomPercent}
-                      onChange={(e) => handleBottomPercentChange(parseInt(e.target.value, 10))}
-                      className="w-full accent-amber-500 h-1 bg-slate-800 rounded cursor-pointer"
-                      title="Vị trí đáy"
-                    />
+
+                  {/* Chọn Font chữ */}
+                  <div>
+                    <select
+                      value={subtitleFontFamily}
+                      onChange={(e) => handleFontFamilyChange(e.target.value)}
+                      className="w-full bg-slate-950 border border-slate-700 text-slate-200 text-[11px] rounded-lg px-2 py-1 outline-none focus:border-amber-500 font-sans"
+                    >
+                      {SUBTITLE_FONTS.map((font) => (
+                        <option key={font.id} value={font.id}>
+                          {font.name} — {font.desc}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  {/* Độ đậm chữ & Chế độ In hoa */}
+                  <div className="flex items-center justify-between gap-1.5">
+                    {/* 3 Nấc Độ đậm */}
+                    <div className="flex items-center bg-slate-950 border border-slate-700 rounded-lg p-0.5 text-[10px]">
+                      <button
+                        type="button"
+                        onClick={() => handleFontWeightChange('normal')}
+                        className={`px-2 py-0.5 rounded transition cursor-pointer ${
+                          subtitleFontWeight === 'normal'
+                            ? 'bg-amber-500 text-slate-950 font-bold'
+                            : 'text-slate-400 hover:text-slate-200'
+                        }`}
+                        title="Độ đậm: Vừa (Medium ~500)"
+                      >
+                        Vừa
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleFontWeightChange('bold')}
+                        className={`px-2 py-0.5 rounded transition cursor-pointer ${
+                          subtitleFontWeight === 'bold'
+                            ? 'bg-amber-500 text-slate-950 font-bold'
+                            : 'text-slate-400 hover:text-slate-200'
+                        }`}
+                        title="Độ đậm: Đậm (Bold ~700) - Mặc định"
+                      >
+                        Đậm
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleFontWeightChange('extraBold')}
+                        className={`px-2 py-0.5 rounded transition cursor-pointer ${
+                          subtitleFontWeight === 'extraBold'
+                            ? 'bg-amber-500 text-slate-950 font-bold'
+                            : 'text-slate-400 hover:text-slate-200'
+                        }`}
+                        title="Độ đậm: Rất đậm (ExtraBold ~800)"
+                      >
+                        Rất đậm
+                      </button>
+                    </div>
+
+                    {/* Toggle In Hoa Toàn Bộ */}
+                    <button
+                      type="button"
+                      onClick={() => handleAllCapsChange(!subtitleAllCaps)}
+                      className={`flex-1 py-1 px-2 rounded-lg text-[10px] font-bold border transition flex items-center justify-center gap-1 cursor-pointer ${
+                        subtitleAllCaps
+                          ? 'bg-amber-500/20 border-amber-500/50 text-amber-300'
+                          : 'bg-slate-950 border-slate-700 text-slate-400 hover:text-slate-200'
+                      }`}
+                      title={subtitleAllCaps ? 'Đang BẬT IN HOA TOÀN BỘ' : 'Đang TẮT (Giữ nguyên viết hoa/thường tự nhiên)'}
+                    >
+                      <span className="font-mono">{subtitleAllCaps ? 'AA' : 'Aa'}</span>
+                      <span>{subtitleAllCaps ? 'IN HOA' : 'Tự nhiên'}</span>
+                    </button>
+                  </div>
+
+                  {/* Thanh trượt Cỡ chữ & Lề đáy */}
+                  <div className="grid grid-cols-2 gap-2 pt-0.5">
+                    <div>
+                      <div className="flex justify-between text-[9px] text-slate-400 mb-0.5">
+                        <span>Cỡ chữ:</span>
+                        <span className="font-mono text-amber-300">{subtitleFontSize}px</span>
+                      </div>
+                      <input
+                        type="range"
+                        min="40"
+                        max="90"
+                        step="1"
+                        value={subtitleFontSize}
+                        onChange={(e) => handleFontSizeChange(parseInt(e.target.value, 10))}
+                        className="w-full accent-amber-500 h-1 bg-slate-800 rounded cursor-pointer"
+                        title="Cỡ chữ phụ đề (40px - 90px)"
+                      />
+                    </div>
+                    <div>
+                      <div className="flex justify-between text-[9px] text-slate-400 mb-0.5">
+                        <span>Lề đáy:</span>
+                        <span className="font-mono text-amber-300">{subtitleBottomPercent}%</span>
+                      </div>
+                      <input
+                        type="range"
+                        min="12"
+                        max="35"
+                        step="1"
+                        value={subtitleBottomPercent}
+                        onChange={(e) => handleBottomPercentChange(parseInt(e.target.value, 10))}
+                        className="w-full accent-amber-500 h-1 bg-slate-800 rounded cursor-pointer"
+                        title="Vị trí từ lề đáy lên (12% - 35%)"
+                      />
+                    </div>
                   </div>
                 </div>
 

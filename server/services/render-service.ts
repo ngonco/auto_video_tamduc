@@ -38,6 +38,8 @@ export interface RenderRequest {
   subtitleFontSize?: number;
   subtitleBottomPercent?: number;
   fontFamily?: string;
+  fontWeight?: 'normal' | 'bold' | 'extraBold';
+  allCaps?: boolean;
   outroPath?: string;
   outroEnabled?: boolean;
   outroDuration?: number;
@@ -60,28 +62,53 @@ async function checkHasAudio(filePath: string): Promise<boolean> {
 }
 
 /**
+ * Lấy tên font và style Bold cho ASS dựa vào fontFamily và fontWeight
+ */
+export function getAssFontInfo(
+  fontFamily: string = 'Lexend',
+  fontWeight: 'normal' | 'bold' | 'extraBold' = 'bold'
+): { fontName: string; isBold: number } {
+  const normFamily = (fontFamily || 'Lexend').trim();
+  const weight = fontWeight || 'bold';
+
+  if (weight === 'extraBold') {
+    if (normFamily === 'Quicksand') {
+      return { fontName: 'Quicksand', isBold: -1 };
+    }
+    return { fontName: `${normFamily} ExtraBold`, isBold: 0 };
+  } else if (weight === 'normal') {
+    if (normFamily === 'Be Vietnam Pro') {
+      return { fontName: 'Be Vietnam Pro', isBold: 0 };
+    }
+    return { fontName: `${normFamily} Medium`, isBold: 0 };
+  } else {
+    // Bold (default)
+    return { fontName: normFamily, isBold: -1 };
+  }
+}
+
+/**
  * Sinh file phụ đề Advanced SubStation Alpha (.ass) hỗ trợ Karaoke và viền đổ bóng sắc nét không lỗi font.
  * QUY TẮC ĐỒNG BỘ 1:1 CỠ CHỮ & ĐỘ DÀY (PIXEL MATCHING RATIO):
  * - CSS Pixels trong Remotion Player chạy ở chuẩn 96 DPI.
  * - ASS font size (libass FreeType) chạy theo hệ đơn vị Point (72 DPI).
  * - Hệ số quy đổi chuẩn xác: calibratedFontSize = Math.round(fontSize * (96 / 72)) = Math.round(fontSize * 1.3333).
- * - Sử dụng "Be Vietnam Pro ExtraBold" để khớp trọn vẹn với fontWeight: 800 của Preview, đảm bảo chữ to, nét, dày dặn, không bị bé/lép khi xuất video.
+ * - Tự động nạp đúng font name và weight từ assets/fonts/ để đồng bộ tuyệt đối với Remotion Preview.
  */
 export function generateAssKaraokeSubtitleFile(
   subtitles: SubtitleLine[],
   outAssPath: string,
-  fontFamily: string = 'Be Vietnam Pro',
+  fontFamily: string = 'Lexend',
+  fontWeight: 'normal' | 'bold' | 'extraBold' = 'bold',
+  allCaps: boolean = true,
   fontSize: number = 65,
   bottomPercent: number = 22
 ) {
   // Chuẩn hóa hệ số quy đổi 96 DPI CSS px -> 72 DPI ASS pt (tỉ lệ 1.3333)
   const calibratedFontSize = Math.round((fontSize || 65) * (96 / 72));
 
-  // Nạp font ExtraBold (weight 800) đồng bộ với Remotion Preview fontWeight: 800
-  let assFontName = fontFamily;
-  if (!fontFamily || fontFamily === 'Be Vietnam Pro') {
-    assFontName = 'Be Vietnam Pro ExtraBold';
-  }
+  // Lấy tên font và trạng thái Bold tương ứng
+  const { fontName: assFontName, isBold: assBold } = getAssFontInfo(fontFamily, fontWeight);
 
   const marginV = Math.round(1920 * (bottomPercent / 100));
   // Viền chữ sắc nét tỉ lệ theo kích thước font
@@ -98,7 +125,7 @@ PlayResY: 1920
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Karaoke,${assFontName},${calibratedFontSize},&H0000D7FF,&H00FFFFFF,&H00000000,&H90000000,0,0,0,0,100,100,1,0,1,${outlineWidth},2.5,2,40,40,${marginV},1
+Style: Karaoke,${assFontName},${calibratedFontSize},&H0000D7FF,&H00FFFFFF,&H00000000,&H90000000,${assBold},0,0,0,100,100,1,0,1,${outlineWidth},2.5,2,40,40,${marginV},1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -145,7 +172,8 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         karaokeText += `{\\k${gapCenti}}`;
       }
       const durationCenti = Math.max(1, Math.round((w.end - w.start) * 100));
-      karaokeText += `{\\kf${durationCenti}}${w.word.toUpperCase()} `;
+      const wordText = allCaps ? w.word.toUpperCase() : w.word;
+      karaokeText += `{\\kf${durationCenti}}${wordText} `;
       lastTime = w.end;
     });
 
@@ -194,8 +222,18 @@ export async function renderFinalVideo(
   const assPath = path.join(tempDir, 'subtitles.ass');
   const subFontSize = req.subtitleFontSize || 65;
   const subBottomPct = req.subtitleBottomPercent || 22;
-  const subFontFamily = req.fontFamily || 'Be Vietnam Pro';
-  generateAssKaraokeSubtitleFile(req.subtitles, assPath, subFontFamily, subFontSize, subBottomPct);
+  const subFontFamily = req.fontFamily || 'Lexend';
+  const subFontWeight = req.fontWeight || 'bold';
+  const subAllCaps = req.allCaps !== undefined ? req.allCaps : true;
+  generateAssKaraokeSubtitleFile(
+    req.subtitles,
+    assPath,
+    subFontFamily,
+    subFontWeight,
+    subAllCaps,
+    subFontSize,
+    subBottomPct
+  );
 
   // 2. Lấy thời lượng Voice chính xác
   let exactVoiceDuration = 60;

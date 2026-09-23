@@ -46,6 +46,16 @@ export interface SourceClipRecord {
   lastUsedAt?: string;
 }
 
+export type SubtitleFontWeight = 'normal' | 'bold' | 'extraBold';
+
+export interface SubtitleStyles {
+  fontSize: number;
+  bottomPercent: number;
+  fontFamily: string;
+  fontWeight: SubtitleFontWeight;
+  allCaps: boolean;
+}
+
 export interface MainVideoProps {
   durationInFrames: number;
   fps: number;
@@ -58,6 +68,8 @@ export interface MainVideoProps {
   voiceVolume?: number;
   bgmVolume?: number;
   fontFamily?: string;
+  fontWeight?: SubtitleFontWeight;
+  allCaps?: boolean;
   activeWordColor?: string;
   inactiveWordColor?: string;
   fontSize?: number;
