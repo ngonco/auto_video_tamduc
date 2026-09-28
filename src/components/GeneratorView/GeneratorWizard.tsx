@@ -37,7 +37,8 @@ import {
   StopCircle,
   Calendar,
   ChevronDown,
-  ChevronRight
+  ChevronRight,
+  Settings
 } from 'lucide-react';
 import { SubtitleLine } from '../../remotion/types.js';
 import { ManualSubtitleModal } from './ManualSubtitleModal.js';
@@ -99,11 +100,13 @@ interface GeneratorWizardProps {
       enabled: boolean;
     } | null;
   }) => void;
+  onNavigateToSettings?: () => void;
 }
 
 export const GeneratorWizard: React.FC<GeneratorWizardProps> = ({
   initialProjectId,
   onStorylineGenerated,
+  onNavigateToSettings,
 }) => {
   // Projects & Source Mode
   const [projects, setProjects] = useState<ProjectItem[]>([]);
@@ -341,9 +344,11 @@ export const GeneratorWizard: React.FC<GeneratorWizardProps> = ({
         fetchSavedVoices(); // Cập nhật lại lịch sử voice
       } else {
         setErrorMsg(data.error || 'Lỗi xử lý nhận diện giọng nói');
+        setIsMusicMode(false);
       }
     } catch (err: any) {
       setErrorMsg(err.message);
+      setIsMusicMode(false);
     } finally {
       setProcessingSTT(false);
     }
@@ -978,9 +983,73 @@ export const GeneratorWizard: React.FC<GeneratorWizardProps> = ({
       </div>
 
       {errorMsg && (
-        <div className="mb-6 p-4 bg-red-950/40 border border-red-500/40 rounded-xl text-red-300 text-xs flex items-center gap-3">
-          <AlertCircle className="w-5 h-5 flex-shrink-0 text-red-400" />
-          <span>{errorMsg}</span>
+        <div className="mb-6 p-4 bg-red-950/60 border border-red-500/50 rounded-2xl text-xs shadow-2xl animate-in fade-in duration-200">
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex items-start gap-3">
+              <div className="w-9 h-9 rounded-xl bg-red-500/20 border border-red-500/40 flex items-center justify-center text-red-400 flex-shrink-0 mt-0.5 shadow-inner">
+                <AlertCircle className="w-5 h-5" />
+              </div>
+              <div className="space-y-1">
+                <h4 className="font-bold text-red-200 text-sm">
+                  {errorMsg.includes('402') || errorMsg.includes('HẾT SỐ DƯ') || errorMsg.includes('Insufficient balance')
+                    ? '⚠️ Tài Khoản API Vilao.ai Đã Hết Số Dư'
+                    : errorMsg.includes('401')
+                    ? '⚠️ Lỗi Xác Thực API Key'
+                    : '⚠️ Có Lỗi Khi Xử Lý Âm Thanh / Phụ Đề'}
+                </h4>
+                <p className="text-red-300/90 leading-relaxed">{errorMsg}</p>
+
+                <div className="flex items-center gap-2 pt-2 flex-wrap">
+                  {voicePath && (
+                    <button
+                      type="button"
+                      onClick={() => processVoiceFile(voicePath, voiceName, true, false)}
+                      disabled={processingSTT}
+                      className="px-3.5 py-1.5 bg-gradient-to-r from-red-500 to-amber-500 hover:from-red-400 hover:to-amber-400 text-slate-950 font-extrabold rounded-xl transition flex items-center gap-1.5 cursor-pointer disabled:opacity-50 text-[11px] shadow-md shadow-red-500/20"
+                    >
+                      <RefreshCw className={`w-3.5 h-3.5 ${processingSTT ? 'animate-spin' : ''}`} />
+                      <span>Thử Lại Nhận Diện</span>
+                    </button>
+                  )}
+
+                  {onNavigateToSettings && (
+                    <button
+                      type="button"
+                      onClick={onNavigateToSettings}
+                      className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-amber-300 hover:text-amber-200 border border-amber-500/40 font-semibold rounded-xl transition flex items-center gap-1.5 cursor-pointer text-[11px]"
+                    >
+                      <Settings className="w-3.5 h-3.5 text-amber-400" />
+                      <span>Cài Đặt API Key</span>
+                    </button>
+                  )}
+
+                  {voicePath && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsMusicMode(true);
+                        setErrorMsg('');
+                      }}
+                      className="px-3 py-1.5 bg-purple-900/60 hover:bg-purple-800/80 text-purple-200 border border-purple-500/40 font-semibold rounded-xl transition flex items-center gap-1.5 cursor-pointer text-[11px]"
+                      title="Bỏ qua phụ đề và dùng file âm thanh này làm video nhạc nền"
+                    >
+                      <Music className="w-3.5 h-3.5 text-purple-300" />
+                      <span>Tiếp Tục Dùng Làm Nhạc Nền</span>
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setErrorMsg('')}
+              className="p-1 text-red-400/70 hover:text-red-200 rounded-lg transition cursor-pointer"
+              title="Đóng thông báo"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
         </div>
       )}
 
@@ -1097,6 +1166,10 @@ export const GeneratorWizard: React.FC<GeneratorWizardProps> = ({
                     const val = e.target.checked;
                     setAutoSttEnabled(val);
                     localStorage.setItem('auto_video_auto_stt_enabled', String(val));
+                    // Khi người dùng BẬT lại: nếu đang chọn file voice và chưa có phụ đề -> tự động kích hoạt nhận diện STT ngay lập tức!
+                    if (val && voicePath && (!subtitles || subtitles.length === 0) && !processingSTT) {
+                      processVoiceFile(voicePath, voiceName, true, false);
+                    }
                   }}
                   className="w-4 h-4 rounded text-amber-500 bg-slate-800 border-slate-700 focus:ring-amber-500 focus:ring-offset-slate-900 cursor-pointer accent-amber-500"
                 />

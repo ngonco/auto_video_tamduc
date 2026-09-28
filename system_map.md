@@ -159,14 +159,22 @@ Tổng thời lượng Video = Thời lượng Voice chính xác (T giây từ f
         + **Xử lý khoảng lặng & Chống Crash Player (Remotion Hooks Guard Rule)**:
           * Tự động chèn thẻ {\k<gap>} trong file ASS để khớp tuyệt đối từng nhịp ngắt nghỉ của giọng Voice.
           * Trong `KaraokeLayer.tsx`: Toàn bộ các hook `useMemo` (`numericFontWeight`, `activeLine`, `resolvedWords`, `midIndex`) được gọi vô điều kiện ở đỉnh component trước mọi câu lệnh early return. Ngăn chặn triệt để lỗi vi phạm thứ tự React Hook (`Rendered fewer hooks than expected`) làm sập Remotion Player / biến thành màn hình đen khi playhead đi qua các khoảng lặng giữa 2 câu phụ đề.
-      - **Tầng 7 (Cơ Chế Phòng Thủ STT & Chế Độ Video Nhạc Nền - Music / Non-Vocal Safe Mode & Graceful Degradation)**:
+      - **Tầng 7 (Cơ Chế Phòng Thủ STT, Phân Biệt Lỗi API Chuẩn Xác & Chế Độ Video Nhạc Nền - Music / Non-Vocal Safe Mode & API Error Transparency)**:
         + **Đo thời lượng độc lập bằng ffprobe**: Luôn lấy thời lượng audio chính xác 100% trước hoặc độc lập với STT.
-        + **Phòng thủ STT Upstream**: Khi gặp file nhạc thuần túy, nhạc thiền không lời hoặc Upstream Gateway trả về HTTP 400/500, hệ thống không throw ngoại lệ làm ngắt luồng mà tự động gán `isMusic: true`, trả về `subtitles: []` và bỏ qua bước gọi LLM sửa ngữ cảnh.
-        + **Giao diện Trực quan & Bỏ chặn Lắp ráp**: Giao diện hiển thị banner tím dịu mắt `🎵 Chế Độ Video Nhạc Nền`, nút `⚡ TỰ ĐỘNG LẮP RÁP VIDEO 9:16` luôn sẵn sàng bấm ngay (không bắt buộc phải có phụ đề).
+        + **Phân biệt rạch ròi Lỗi API vs Nhạc thuần túy**: 
+          * *Nhạc thuần túy*: Chỉ khi Whisper STT trả về HTTP 200 OK thành công nhưng `text` rỗng hoặc `words` rỗng thì mới đánh dấu `isMusic: true`.
+          * *Lỗi API (HTTP 402 Hết số dư / 401 Sai key / 429 Quá hạn mức / 500 Lỗi Gateway)*: Tuyệt đối **KHÔNG nuốt lỗi** thành chế độ nhạc nền. Hệ thống ném ngoại lệ rõ ràng với thông điệp tiếng Việt cụ thể (ví dụ: *Tài khoản API Vilao.ai đã HẾT SỐ DƯ (402 Payment Required)...*).
+        + **Giao diện Trực quan & Actionable Error Banner**:
+          * Khi gặp lỗi API: Hiển thị Banner đỏ nổi bật kèm nút `[🔄 Thử Lại Nhận Diện]`, nút `[⚙️ Cài Đặt API Key]` (chuyển thẳng sang Tab Cài Đặt), và nút `[🎵 Tiếp Tục Dùng Làm Nhạc Nền]` (nếu muốn bỏ qua phụ đề).
+          * Khi thực sự là nhạc không lời: Hiển thị banner tím `🎵 Chế Độ Video Nhạc Nền`, nút `⚡ TỰ ĐỘNG LẮP RÁP VIDEO 9:16` luôn sẵn sàng bấm ngay (không bắt buộc phải có phụ đề).
         + **Tự động Tắt BGM Phụ (Anti-Clash Audio)**: Mặc định gán `selectedBgm: ''` (None) khi dựng từ file nhạc để tránh 2 bài nhạc phát đè lên nhau gây ồn; bản nhạc chính phát tròn trịa ở âm lượng 100%.
-        + **Tùy Chọn Bật/Tắt Tự Động Tạo Phụ Đề (Auto STT Toggle Checkbox)**:
+        + **Cơ chế Bỏ Qua Cache Rỗng (Smart Empty-Cache Bypass)**:
+          * Khi người dùng yêu cầu STT (`skipStt: false`): Nếu file đã có trong bảng `voices` nhưng có `subtitles.length === 0` (do trước đó từng bị lỗi hoặc nạp khi tắt STT), hệ thống tự động bỏ qua cache rỗng và kích hoạt Whisper STT để tạo phụ đề.
+          * Chỉ tái sử dụng cache khi file đã có sẵn phụ đề hợp lệ (`subtitles.length > 0`), hoặc khi người dùng chủ động tắt STT (`skipStt: true`).
+        + **Tùy Chọn Bật/Tắt Tự Động Tạo Phụ Đề & Kích Hoạt Tức Thì (Instant STT Toggle Engine)**:
           * Checkbox trực quan ngay tại Unified Voice Dropzone ở Bước 1 của Wizard: `[x] Tự động tạo phụ đề (AI STT Whisper + Gemini)`.
           * Mặc định: BẬT (`checked: true`), tự động lưu tùy chọn của người dùng vào `localStorage` (`auto_video_auto_stt_enabled`).
+          * **Kích hoạt tức thì**: Khi người dùng tick [BẬT] lại checkbox nếu đang có file âm thanh được chọn và chưa có phụ đề, hệ thống tự động kích hoạt nhận diện STT ngay lập tức mà không cần phải nạp lại file.
           * Khi TẮT (`skipStt: true`): Hệ thống bỏ qua gọi Whisper STT và Gemini AI spell-check, chỉ đo thời lượng audio bằng `ffprobe` trong ~0.2s, ghi nhớ vào database và chuyển thẳng sang trạng thái sẵn sàng cho Chế độ Nhạc nền hoặc Dán phụ đề thủ công.
         + **Thuật Toán Ngắt Dòng Phụ Đề Thủ Công / Thơ Ca / Lời Bài Hát (1:1 Newline & Proportional Word-Timing)**:
           * **Bảo toàn 100% dòng ngắt (`\n`)**: Mỗi dòng xuống hàng bằng phím Enter tương ứng chính xác với 1 khối phụ đề (`SubtitleLine`), tuyệt đối không xé vụn các câu thơ/câu hát 10-12 từ thành nhiều phân đoạn nhỏ.

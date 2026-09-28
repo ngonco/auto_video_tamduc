@@ -386,50 +386,41 @@ generatorRouter.post('/process-voice', async (req, res) => {
     }
 
     // Kiểm tra xem voice đã từng được xử lý trong database chưa để trả kết quả ngay (nếu không yêu cầu forceRefresh)
-    if (!forceRefresh) {
+    if (!forceRefresh && !skipStt) {
       const existing: any = db.prepare(`SELECT * FROM voices WHERE file_path = ?`).get(filePath);
       if (existing) {
         const rawWords = existing.raw_words_json ? JSON.parse(existing.raw_words_json) : [];
         let subs = existing.subtitles_json ? JSON.parse(existing.subtitles_json) : [];
-        const isMusic = rawWords.length === 0 && subs.length === 0;
+        const hasSubtitles = rawWords.length > 0 || subs.length > 0;
 
-        // Nếu là bản ghi nhạc nền không phụ đề
-        if (isMusic) {
-          return res.json({
-            success: true,
-            cached: true,
-            isMusicMode: true,
-            data: {
-              id: existing.id,
-              rawText: '',
-              duration: existing.duration,
-              words: [],
-              subtitles: [],
-            },
-          });
-        }
+        // Chỉ tái sử dụng cache nếu đã có phụ đề hợp lệ!
+        // Nếu trước đó file bị lưu với 0 phụ đề (do lỗi 402 hoặc nạp khi skipStt), nhưng giờ người dùng muốn STT (skipStt: false),
+        // tuyệt đối KHÔNG trả về cache rỗng mà phải chạy nhận diện STT.
+        if (hasSubtitles) {
+          const lastSubEnd = subs.length > 0 ? subs[subs.length - 1].end : 0;
+          const lastRawWordEnd = rawWords.length > 0 ? rawWords[rawWords.length - 1].end : 0;
 
-        const lastSubEnd = subs.length > 0 ? subs[subs.length - 1].end : 0;
-        const lastRawWordEnd = rawWords.length > 0 ? rawWords[rawWords.length - 1].end : 0;
-
-        // Nếu bản ghi cũ trong DB bị thiếu phụ đề đoạn cuối (lastSubEnd hoặc lastRawWordEnd < 85% thời lượng voice)
-        // -> Tự động kích hoạt nhận diện lại toàn diện để chữa lành và phục hồi đầy đủ 100% phụ đề!
-        if (existing.duration > 5 && (lastSubEnd < existing.duration * 0.85 || lastRawWordEnd < existing.duration * 0.85)) {
-          console.log(`[Generator] Detected incomplete legacy subtitle tail for ${filePath} (${lastSubEnd.toFixed(1)}s / ${existing.duration.toFixed(1)}s). Triggering auto-heal STT...`);
-          // Không return cache, để chạy tiếp xuống transcribeAudio bên dưới để chữa lành
+          // Nếu bản ghi cũ trong DB bị thiếu phụ đề đoạn cuối (lastSubEnd hoặc lastRawWordEnd < 85% thời lượng voice)
+          // -> Tự động kích hoạt nhận diện lại toàn diện để chữa lành và phục hồi đầy đủ 100% phụ đề!
+          if (existing.duration > 5 && (lastSubEnd < existing.duration * 0.85 || lastRawWordEnd < existing.duration * 0.85)) {
+            console.log(`[Generator] Detected incomplete legacy subtitle tail for ${filePath} (${lastSubEnd.toFixed(1)}s / ${existing.duration.toFixed(1)}s). Triggering auto-heal STT...`);
+            // Không return cache, để chạy tiếp xuống transcribeAudio bên dưới để chữa lành
+          } else {
+            return res.json({
+              success: true,
+              cached: true,
+              isMusicMode: false,
+              data: {
+                id: existing.id,
+                rawText: existing.stt_text,
+                duration: existing.duration,
+                words: rawWords,
+                subtitles: subs,
+              },
+            });
+          }
         } else {
-          return res.json({
-            success: true,
-            cached: true,
-            isMusicMode: false,
-            data: {
-              id: existing.id,
-              rawText: existing.stt_text,
-              duration: existing.duration,
-              words: rawWords,
-              subtitles: subs,
-            },
-          });
+          console.log(`[Generator] Existing record for ${filePath} has empty subtitles, but user requested STT (skipStt=false). Running STT...`);
         }
       }
     }
@@ -497,7 +488,12 @@ generatorRouter.post('/process-voice', async (req, res) => {
       },
     });
   } catch (err: any) {
-    res.status(500).json({ success: false, error: err.message });
+    console.error('[Generator] Error in process-voice:', err);
+    res.status(err.status || 500).json({
+      success: false,
+      error: err.message || 'Lỗi nhận diện giọng nói STT',
+      errorCode: err.code || 'STT_FAILED',
+    });
   }
 });
 

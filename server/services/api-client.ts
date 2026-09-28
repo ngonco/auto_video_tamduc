@@ -76,7 +76,36 @@ export async function callVilaoChatCompletion(params: {
 
   if (!res.ok) {
     const errText = await res.text();
-    throw new Error(`Vilao Gateway HTTP ${res.status}: ${errText}`);
+    let parsedErr: any = null;
+    try {
+      parsedErr = JSON.parse(errText);
+    } catch (_) {}
+
+    const errCode = parsedErr?.error?.code || '';
+    const errMsg = parsedErr?.error?.message || errText;
+
+    if (res.status === 402 || errCode === 'INSUFFICIENT_BALANCE' || errMsg.includes('Insufficient balance') || errMsg.includes('insufficient_quota')) {
+      const error: any = new Error(
+        'Tài khoản API Vilao.ai đã HẾT SỐ DƯ (402 Payment Required / Insufficient Balance). Vui lòng nạp thêm tiền tại https://vilao.ai hoặc cập nhật API Key mới trong Cài Đặt Hệ Thống.'
+      );
+      error.status = 402;
+      error.code = 'INSUFFICIENT_BALANCE';
+      throw error;
+    }
+
+    if (res.status === 401 || errCode === 'invalid_api_key' || errMsg.includes('Incorrect API key')) {
+      const error: any = new Error(
+        'API Key Vilao không hợp lệ hoặc đã hết hạn (401 Unauthorized). Vui lòng kiểm tra lại trong Cài Đặt Hệ Thống.'
+      );
+      error.status = 401;
+      error.code = 'UNAUTHORIZED';
+      throw error;
+    }
+
+    const error: any = new Error(`Vilao Gateway HTTP ${res.status}: ${errMsg}`);
+    error.status = res.status;
+    error.code = errCode || `HTTP_${res.status}`;
+    throw error;
   }
 
   const rawText = await res.text();

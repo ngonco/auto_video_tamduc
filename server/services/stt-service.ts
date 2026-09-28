@@ -67,7 +67,45 @@ async function transcribeSingleAudio(audioFilePath: string): Promise<{ text: str
 
   if (!res.ok) {
     const errBody = await res.text();
-    throw new Error(`STT Gateway HTTP ${res.status}: ${errBody}`);
+    let parsedErr: any = null;
+    try {
+      parsedErr = JSON.parse(errBody);
+    } catch (_) {}
+
+    const errCode = parsedErr?.error?.code || '';
+    const errMsg = parsedErr?.error?.message || errBody;
+
+    if (res.status === 402 || errCode === 'INSUFFICIENT_BALANCE' || errMsg.includes('Insufficient balance') || errMsg.includes('insufficient_quota')) {
+      const error: any = new Error(
+        'Tài khoản API Vilao.ai đã HẾT SỐ DƯ (402 Payment Required / Insufficient Balance). Vui lòng nạp thêm tiền tại https://vilao.ai hoặc cập nhật API Key mới trong Cài Đặt Hệ Thống.'
+      );
+      error.status = 402;
+      error.code = 'INSUFFICIENT_BALANCE';
+      throw error;
+    }
+
+    if (res.status === 401 || errCode === 'invalid_api_key' || errMsg.includes('Incorrect API key')) {
+      const error: any = new Error(
+        'API Key STT (VILAO_STT_KEY) không hợp lệ hoặc đã hết hạn (401 Unauthorized). Vui lòng kiểm tra lại trong Cài Đặt Hệ Thống.'
+      );
+      error.status = 401;
+      error.code = 'UNAUTHORIZED';
+      throw error;
+    }
+
+    if (res.status === 429) {
+      const error: any = new Error(
+        'Hạn mức gọi API STT đã vượt quá giới hạn (429 Too Many Requests). Vui lòng đợi trong giây lát rồi thử lại.'
+      );
+      error.status = 429;
+      error.code = 'RATE_LIMIT';
+      throw error;
+    }
+
+    const error: any = new Error(`Lỗi STT Gateway (HTTP ${res.status}): ${errMsg}`);
+    error.status = res.status;
+    error.code = errCode || `HTTP_${res.status}`;
+    throw error;
   }
 
   const response: any = await res.json();
@@ -164,31 +202,17 @@ export async function transcribeAudio(audioFilePath: string): Promise<STTResult>
     console.warn('[STTService] Could not probe audio metadata:', mErr.message);
   }
 
-  // 2. Pass 1: Nhận diện toàn bộ file âm thanh (có bọc an toàn tránh crash khi gặp nhạc không lời hoặc gateway 400)
-  let firstPass: { text: string; duration: number; words: KaraokeWord[] } = {
-    text: '',
-    duration: accurateDuration,
-    words: [],
-  };
-
-  try {
-    firstPass = await transcribeSingleAudio(audioFilePath);
-    if (!accurateDuration && firstPass.duration > 0) {
-      accurateDuration = firstPass.duration;
-    }
-  } catch (sttErr: any) {
-    console.warn(`[STTService] Transcribe failed or audio has no speech (Music/Non-vocal): ${sttErr.message}`);
-    return {
-      text: '',
-      duration: accurateDuration,
-      words: [],
-      isMusic: true,
-    };
+  // 2. Pass 1: Nhận diện toàn bộ file âm thanh
+  // BẮT BUỘC KHÔNG BỌC CATCH NUỐT LỖI API:
+  // Nếu API báo 402 (Hết tiền), 401 (Sai key), 429 hay lỗi mạng, hàm phải ném lỗi để người dùng biết!
+  const firstPass = await transcribeSingleAudio(audioFilePath);
+  if (!accurateDuration && firstPass.duration > 0) {
+    accurateDuration = firstPass.duration;
   }
 
-  // Nếu STT trả về text rỗng hoặc không có từ nào, trả về chế độ nhạc nền an toàn
+  // Chỉ khi API trả về 200 OK nhưng văn bản rỗng hoặc không có từ nào -> Đây mới thực sự là âm thanh thuần nhạc / không lời
   if (!firstPass.text.trim() || firstPass.words.length === 0) {
-    console.log('[STTService] STT returned empty words or text. Flagging as Music / Non-speech mode.');
+    console.log('[STTService] STT returned 200 OK with empty words/text. Flagging as genuine Music / Non-speech audio.');
     return {
       text: '',
       duration: accurateDuration,

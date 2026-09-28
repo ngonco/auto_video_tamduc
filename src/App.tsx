@@ -113,6 +113,7 @@ export const App: React.FC = () => {
           <GeneratorWizard
             initialProjectId={preselectedProjectId}
             onStorylineGenerated={handleStorylineGenerated}
+            onNavigateToSettings={() => setActiveTab('settings')}
           />
         )}
 
