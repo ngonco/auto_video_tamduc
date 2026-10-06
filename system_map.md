@@ -47,6 +47,7 @@
   ├── Vision Analyzer        (server/services/vision-analyzer.ts): Phân loại 4 giai đoạn bằng ts/gemini-3.1-flash-lite
   ├── STT Groq + Fallback    (server/services/stt-service.ts)   : Ưu tiên Groq trực tiếp; dự phòng Whisper/Faster Whisper/Gemini Vilao, word timestamps cho Karaoke
   ├── Subtitle Sync Engine   (server/services/subtitle-fixer.ts): Phân đoạn phụ đề 9:16 bảo toàn 100% từ ngữ & mốc thời gian Voice, chuẩn hóa danh xưng Phật học & ngữ pháp tiếng Việt
+  ├── Buddhist Capitalization (src/shared/buddhist-capitalization.ts): Viết hoa sau STT và khi hiển thị mọi phụ đề trên video nháp/video xuất, đồng bộ text và từ karaoke
   ├── Storyline Engine       (server/services/storyline-engine.ts): Phân bổ clip/ảnh 4 giai đoạn theo thời lượng Voice
   └── Render Service         (server/services/render-service.ts): Render MP4 1080x1920 (Cross Dissolve + Image Zoom + ASS Karaoke + Outro)
 -------------------------------------------------------------------------------------------------------
@@ -141,7 +142,7 @@ Tổng thời lượng Video = Thời lượng Voice chính xác (T giây từ f
           * `Rất đậm (ExtraBold ~800)`: Nét siêu dày, tạo ấn tượng thị giác mạnh mẽ.
         + **Chế Độ In Hoa Toàn Bộ (All-Caps Toggle)**:
           * `[BẬT] IN HOA (UPPERCASE)` *(Mặc định mới)*: Tự động in hoa toàn bộ chữ cái để tạo điểm nhấn mạnh mẽ.
-          * `[TẮT] Tự nhiên (As-is)`: Giữ nguyên văn phong viết hoa/thường tự nhiên theo câu (ví dụ: *Nam Mô A Di Đà Phật*, chữ đầu câu viết hoa, danh từ riêng viết hoa).
+          * `[TẮT] Tự nhiên (As-is)`: Hiển thị theo văn phong của câu, tự động viết hoa danh hiệu và thuật ngữ Phật giáo qua `src/shared/buddhist-capitalization.ts` cho mọi phụ đề (mới/cũ/thủ công), ví dụ: *Nam Mô A Di Đà Phật*, *Bậc Cao Tăng*, *Thần Thánh*. Áp dụng cùng bộ xử lý cho Remotion Preview và ASS khi xuất video, không ghi đè nội dung đã lưu.
         + **Quy chuẩn tỷ lệ chuyển đổi Cỡ chữ 1:1 (96 DPI CSS px ➔ 72 DPI ASS pt)**:
           * Remotion Preview chạy trên nền HTML/CSS với chuẩn màn hình **96 DPI**.
           * FFmpeg `subtitles` filter (libass + FreeType) tính toán kích thước phông chữ theo đơn vị **Typographical Points (72 DPI)**.
@@ -402,6 +403,7 @@ Auto_Video_TamDuc/
 │       └── render-service.ts   # FFmpeg render video & ASS karaoke
 │
 ├── src/                        # Frontend React 18 + Remotion
+│   ├── shared/buddhist-capitalization.ts # Bộ viết hoa dùng chung STT/preview/ASS; không phụ thuộc API
 │   ├── main.tsx
 │   ├── App.tsx
 │   ├── styles/index.css        # Giao diện tối, hiệu ứng Karaoke Phật giáo
@@ -476,6 +478,27 @@ Hệ thống đã tạo sẵn bộ công cụ sao lưu tự động toàn bộ m
 ---
 
 ## 10. NHẬT KÝ KIỂM THỬ & TỐI ƯU HÓA TOÀN DIỆN (SYSTEM AUDIT LOG)
+
+- **06/10/2026 — Đóng gói bản viết hoa phụ đề và cập nhật GitHub**:
+  - `npm run build:all` thành công: TypeScript, frontend production và launcher `Auto_Video_TamDuc.exe` (7168 byte), kiểm tra header `MZ`/chữ ký `PE` hợp lệ. Bản này dùng bộ viết hoa chung cho STT, mọi phụ đề trên video nháp và ASS video xuất; giữ kết quả 21/21 kiểm thử đã đạt, không thay logic sau kiểm thử.
+  - Cập nhật nhánh `main` của repo `ngonco/auto_video_tamduc`: file EXE, `package.json`, `scripts/buddhist-capitalization.test.ts`, `src/shared/buddhist-capitalization.ts`, `KaraokeLayer.tsx`, route STT, render service và tài liệu. Loại trừ thay đổi dữ liệu cục bộ `database/library.db`, `.env`, `.cache/` và `dist/`; kiểm tra nội dung chuẩn bị commit để tránh đưa khóa API lên GitHub.
+  - EXE tiếp tục là launcher chạy từ thư mục ứng dụng, cần mã nguồn/dependencies và `.env` cục bộ như thiết kế hiện có. Frontend production đã build; `dist/` vẫn theo Git ignore.
+
+- **06/10/2026 — Viết hoa mọi phụ đề trên video nháp và video xuất**:
+  - Phạm vi mới được người dùng xác nhận thay thế giới hạn chỉ STT mới ở mục trước: áp dụng cả phụ đề cũ, tự tạo và sửa/nhập thủ công khi hiển thị. Bổ sung `Cao Tăng`, `Bậc Cao Tăng`, `Thần Thánh`, `Bậc Thánh` và cả `Thánh` đứng riêng; không thêm cụm gõ nhầm “Thành Thánh”.
+  - Chuyển bộ xử lý từ `server/services/buddhist-capitalization.ts` sang `src/shared/buddhist-capitalization.ts`, chỉ import type, không đưa Node/khóa/API vào frontend. Route STT đổi import và tiếp tục viết hoa phụ đề mới trước khi lưu.
+  - `prepareSubtitlesForDisplay` dùng chung cho `KaraokeLayer.tsx` và `generateAssKaraokeSubtitleFile` trong `render-service.ts`: bù từ karaoke cho dòng thủ công thiếu/rỗng `words`, sau đó viết hoa toàn bộ trước khi chọn dòng hiện tại/sinh ASS để nhận diện cả cụm qua dòng. Preview dùng `useMemo` theo danh sách phụ đề, không chạy lại từ điển mỗi frame.
+  - Tất cả phụ đề hiển thị dùng chung cách viết chuẩn và giữ mốc karaoke sẵn có; khi thiếu mốc từng từ dùng cùng cách nội suy ở preview/ASS như trước. Không ghi lại phụ đề cũ vào SQLite, không đổi nội dung soạn thảo. `allCaps` vẫn hoạt động sau chuẩn hóa: tắt hiển thị `Cao Tăng`, bật hiển thị `CAO TĂNG` ở cả nháp và xuất.
+  - Mở rộng `npm run test:subtitles`: kiểm tra các cụm mới, dữ liệu cũ/thủ công thiếu `words`, cụm qua dòng có/không có timestamps, component `KaraokeLayer` thực trong context Remotion bằng React SSR và file ASS thực; so khớp chữ hiển thị, tags karaoke, allCaps, khoảng lặng và dữ liệu gốc bất biến. Không gọi API hay sửa SQLite.
+  - Kết quả: 21/21 bài kiểm thử phụ đề đạt; `npm run build` hoàn tất TypeScript và frontend production. Chỉ còn cảnh báo bundle lớn đã có; kiểm tra diff không có lỗi khoảng trắng.
+
+- **06/10/2026 — Tự động viết hoa danh hiệu và thuật ngữ Phật giáo sau STT**:
+  - Theo phạm vi người dùng xác nhận: bao gồm danh hiệu/tên và thuật ngữ; chỉ áp dụng cho phụ đề mới được sinh sau nhận diện giọng nói. Không chuẩn hóa lại bản đã lưu khi đọc cache, văn bản dán/sửa thủ công hoặc phụ đề dự án cũ; không đổi schema SQLite hay cấu hình `allCaps` của preview/render.
+  - Thêm `server/services/buddhist-capitalization.ts`: từ điển cụm bao gồm Phật, A La Hán, Bồ Tát, Tam Bảo, Tứ Diệu Đế, Bát Chánh Đạo, Niết Bàn, Nhân Quả, Luân Hồi, Công Đức, tên kinh/chú và nhiều danh hiệu khác. Muốn mở rộng danh sách chỉ cần thêm cách viết chuẩn vào `BUDDHIST_PHRASES`.
+  - Nhận diện Unicode tiếng Việt, ưu tiên cụm dài nhất, hỗ trợ cụm qua nhiều dòng và dạng dấu nối; giữ dấu câu/khoảng trắng, không ghép qua dấu ngắt câu hay số. Không viết hoa từ độc lập dễ nhầm như “tăng”, “kinh”, “pháp”. Bảo toàn ID, số từ, phân dòng và toàn bộ timestamps; đồng bộ `text` và `words[].word`, không sửa dữ liệu STT gốc.
+  - `POST /api/generator/process-voice` gọi bộ viết hoa sau bước sửa/phân đoạn trong cả nhánh LLM và nhánh dự phòng, trước khi lưu `subtitles_json` và trả kết quả. Các API sửa/lưu/phân dòng thủ công không gọi bộ viết hoa này; phụ đề tạo lại từ STT đi qua cùng bước chuẩn hóa.
+  - Thêm `scripts/buddhist-capitalization.test.ts` và lệnh `npm run test:subtitles`: kiểm tra danh hiệu/thuật ngữ, cụm dài và qua dòng, timestamps/bất biến dữ liệu, dấu câu/dấu nối, Unicode tổ hợp, từ thông thường, karaoke nhiều từ và ghép với bộ phân dòng hiện có. Kiểm thử không gọi API hay sửa SQLite.
+  - Kết quả: 12/12 bài kiểm thử phụ đề thành công; `npm run build` hoàn tất TypeScript và frontend production, chỉ còn cảnh báo kích thước bundle đã có. Kiểm thử/build chạy ngoài sandbox do esbuild cần tạo tiến trình con. Không đóng gói lại launcher hoặc đẩy GitHub trong thay đổi này.
 
 - **06/10/2026 — Đóng gói bản Groq STT để cập nhật GitHub**:
   - `npm run build:all` hoàn tất: TypeScript, frontend production và biên dịch C# launcher `Auto_Video_TamDuc.exe` (7168 byte). Kiểm tra header `MZ` và chữ ký `PE` hợp lệ. Dùng kết quả 29/29 kiểm thử STT và phép thử Groq HTTP 200 đã ghi bên dưới; không thay logic sau kiểm tra.

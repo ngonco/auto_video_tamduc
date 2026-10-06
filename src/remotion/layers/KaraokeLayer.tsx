@@ -1,6 +1,7 @@
 import React from 'react';
 import { useCurrentFrame, useVideoConfig } from 'remotion';
 import { SubtitleLine, SubtitleFontWeight } from '../types.js';
+import { prepareSubtitlesForDisplay } from '../../shared/buddhist-capitalization.js';
 
 interface KaraokeLayerProps {
   subtitles: SubtitleLine[];
@@ -40,32 +41,25 @@ export const KaraokeLayer: React.FC<KaraokeLayerProps> = ({
     }
   }, [fontWeight]);
 
+  // Chuẩn hóa toàn bộ trước khi chọn dòng để nhận diện được cụm bị ngắt dòng.
+  const displaySubtitles = React.useMemo(
+    () => prepareSubtitlesForDisplay(subtitles || []),
+    [subtitles]
+  );
+
   // 2. Tìm câu phụ đề đang hiển thị (Hook useMemo luôn chạy mỗi frame)
   const activeLine = React.useMemo(() => {
-    if (!subtitles || subtitles.length === 0) return null;
+    if (displaySubtitles.length === 0) return null;
     return (
-      subtitles.find(
+      displaySubtitles.find(
         (line) => currentTime >= line.start - 0.05 && currentTime <= line.end + 0.1
       ) || null
     );
-  }, [subtitles, currentTime]);
+  }, [displaySubtitles, currentTime]);
 
   // 3. Đảm bảo an toàn 100% nếu activeLine.words bị thiếu hoặc rỗng (Hook useMemo luôn chạy mỗi frame)
   const resolvedWords = React.useMemo(() => {
-    if (!activeLine) return [];
-    if (activeLine.words && activeLine.words.length > 0) {
-      return activeLine.words;
-    }
-    if (!activeLine.text) return [];
-    const tokens = activeLine.text.trim().split(/\s+/).filter(Boolean);
-    if (tokens.length === 0) return [];
-    const dur = Math.max(0.2, activeLine.end - activeLine.start);
-    const wordDur = dur / tokens.length;
-    return tokens.map((token, idx) => ({
-      word: token,
-      start: Number((activeLine.start + idx * wordDur).toFixed(2)),
-      end: Number((activeLine.start + (idx + 1) * wordDur).toFixed(2)),
-    }));
+    return activeLine?.words ?? [];
   }, [activeLine]);
 
   // 4. Chia 2 hàng cân đối nếu câu dài (> 6 từ hoặc > 28 ký tự)

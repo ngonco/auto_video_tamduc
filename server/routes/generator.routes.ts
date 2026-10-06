@@ -6,6 +6,7 @@ import { execFile } from 'child_process';
 import { v4 as uuidv4 } from 'uuid';
 import { db } from '../db.js';
 import { transcribeAudio } from '../services/stt-service.js';
+import { capitalizeBuddhistSubtitles } from '../../src/shared/buddhist-capitalization.js';
 import {
   polishAndSegmentSubtitles,
   segmentAndPolishSubtitles,
@@ -450,6 +451,8 @@ generatorRouter.post('/process-voice', async (req, res) => {
         console.warn('[Generator] Warning polishing subtitles with LLM, falling back to heuristic:', polishErr.message);
         polishedSubtitles = segmentAndPolishSubtitles(filterHallucinatedWords(sttResult.words));
       }
+      // Chỉ áp dụng cho phụ đề STT mới, kể cả khi LLM phải dùng dự phòng.
+      polishedSubtitles = capitalizeBuddhistSubtitles(polishedSubtitles);
     } else {
       console.log('[Generator] Detected Music / Non-speech audio mode. Skipping subtitle polishing.');
     }
@@ -930,5 +933,3 @@ generatorRouter.post('/relink-voice', async (req, res) => {
     res.status(500).json({ success: false, error: err.message });
   }
 });
-
-

@@ -4,6 +4,7 @@ import fs from 'fs';
 import { SubtitleLine } from './subtitle-fixer.js';
 import { TimelineClipItem } from './storyline-engine.js';
 import { getVideoMetadata } from './ffmpeg.js';
+import { prepareSubtitlesForDisplay } from '../../src/shared/buddhist-capitalization.js';
 
 async function runWithConcurrency<T, R>(
   items: T[],
@@ -131,26 +132,12 @@ Style: Karaoke,${assFontName},${calibratedFontSize},&H0000D7FF,&H00FFFFFF,&H0000
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 `;
 
-  subtitles.forEach((line) => {
+  prepareSubtitlesForDisplay(subtitles).forEach((line) => {
     const startStr = formatAssTime(line.start);
     const endStr = formatAssTime(line.end);
 
-    // Đảm bảo an toàn 100% nếu line.words rỗng (chế độ nhập thủ công)
-    let words = line.words;
-    if (!words || words.length === 0) {
-      const tokens = (line.text || '').trim().split(/\s+/).filter(Boolean);
-      if (tokens.length > 0) {
-        const lineDur = Math.max(0.2, line.end - line.start);
-        const wDur = lineDur / tokens.length;
-        words = tokens.map((token, idx) => ({
-          word: token,
-          start: Number((line.start + idx * wDur).toFixed(2)),
-          end: Number((line.start + (idx + 1) * wDur).toFixed(2)),
-        }));
-      } else {
-        words = [];
-      }
-    }
+    // Chung bộ chuẩn bị với video nháp, gồm cả phụ đề thủ công thiếu words.
+    const words = line.words;
 
     // Chia 2 hàng cân đối nếu câu dài (> 6 từ hoặc > 28 ký tự)
     const shouldWrapBalanced = words.length > 6 || (line.text && line.text.length > 28);

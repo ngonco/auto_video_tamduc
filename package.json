@@ -12,6 +12,7 @@
     "build:all": "npm run build && npm run build:exe",
     "preview": "vite preview",
     "test:stt": "tsx scripts/stt-service.test.ts",
+    "test:subtitles": "tsx scripts/buddhist-capitalization.test.ts",
     "backup": "powershell -ExecutionPolicy Bypass -File ./backup.ps1"
   },
   "dependencies": {
