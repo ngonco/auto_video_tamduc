@@ -1153,7 +1153,7 @@ export const GeneratorWizard: React.FC<GeneratorWizardProps> = ({
               </button>
             </div>
 
-            {/* Tùy chọn Tự động tạo phụ đề (STT Whisper + Gemini AI) */}
+            {/* Tùy chọn Tự động tạo phụ đề (STT + Gemini AI) */}
             <div
               className="mt-2.5 pt-2 border-t border-slate-800/80 w-full max-w-sm flex items-center justify-center gap-2"
               onClick={(e) => e.stopPropagation()}
@@ -1174,7 +1174,7 @@ export const GeneratorWizard: React.FC<GeneratorWizardProps> = ({
                   className="w-4 h-4 rounded text-amber-500 bg-slate-800 border-slate-700 focus:ring-amber-500 focus:ring-offset-slate-900 cursor-pointer accent-amber-500"
                 />
                 <span className="text-xs font-semibold text-slate-300 group-hover:text-amber-300 transition-colors">
-                  Tự động tạo phụ đề (AI STT Whisper + Gemini)
+                  Tự động tạo phụ đề (AI STT + Gemini)
                 </span>
               </label>
               {!autoSttEnabled && (

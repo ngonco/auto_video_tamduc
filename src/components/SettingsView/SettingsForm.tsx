@@ -15,6 +15,8 @@ import {
 } from 'lucide-react';
 
 export const SettingsForm: React.FC = () => {
+  const [groqApiKey, setGroqApiKey] = useState('');
+  const [groqSttModel, setGroqSttModel] = useState('whisper-large-v3-turbo');
   const [sttApiKey, setSttApiKey] = useState('');
   const [subtitleApiKey, setSubtitleApiKey] = useState('');
   const [embeddingApiKey, setEmbeddingApiKey] = useState('');
@@ -40,6 +42,8 @@ export const SettingsForm: React.FC = () => {
       .then((res) => res.json())
       .then((data) => {
         if (data.success) {
+          setGroqApiKey(data.data.groqApiKey || '');
+          setGroqSttModel(data.data.groqSttModel || 'whisper-large-v3-turbo');
           setSttApiKey(data.data.sttApiKey || '');
           setSubtitleApiKey(data.data.subtitleApiKey || '');
           setEmbeddingApiKey(data.data.embeddingApiKey || '');
@@ -125,6 +129,7 @@ export const SettingsForm: React.FC = () => {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          groqApiKey,
           sttApiKey,
           subtitleApiKey,
           embeddingApiKey,
@@ -185,6 +190,27 @@ export const SettingsForm: React.FC = () => {
       )}
 
       <form onSubmit={handleSave} className="space-y-6">
+        <div className="bg-[#151D2E] border border-blue-800/50 rounded-2xl p-6 shadow-xl space-y-3">
+          <div className="flex items-center justify-between">
+            <h3 className="text-sm font-bold text-blue-300 font-montserrat flex items-center gap-2">
+              <Mic className="w-4 h-4" /> Groq STT — Ưu tiên đầu tiên
+            </h3>
+            <span className="text-[10px] text-blue-400 font-mono">{groqSttModel}</span>
+          </div>
+          <label htmlFor="groq-api-key" className="text-xs text-slate-300 block">API Key Groq</label>
+          <input
+            id="groq-api-key"
+            type="password"
+            autoComplete="new-password"
+            placeholder="Nhập API Key Groq (gsk_...)"
+            value={groqApiKey}
+            onChange={(e) => setGroqApiKey(e.target.value)}
+            className="w-full bg-slate-950 border border-slate-700 text-slate-100 text-xs rounded-xl p-3 outline-none focus:border-blue-500 font-mono transition"
+          />
+          <p className="text-[11px] text-slate-400">
+            Groq nhận diện tiếng Việt và mốc từng từ cho Karaoke. Nếu lỗi hoặc không có kết quả, hệ thống tự thử các API STT Vilao bên dưới. Để trống khóa Groq để chỉ dùng Vilao.
+          </p>
+        </div>
         {/* 3 API Keys Vilao Gateway Box */}
         <div className="bg-[#151D2E] border border-slate-800 rounded-2xl p-6 shadow-xl space-y-5">
           <div className="flex items-center justify-between">
@@ -202,7 +228,7 @@ export const SettingsForm: React.FC = () => {
             <div className="flex items-center justify-between">
               <label className="text-xs font-semibold text-slate-200 flex items-center gap-2">
                 <Mic className="w-3.5 h-3.5 text-blue-400" />
-                1. Token STT (VideoTamDuc_STT):
+                1. Token STT dự phòng (VideoTamDuc_STT):
               </label>
               <span className="text-[10px] text-blue-400 font-mono bg-blue-950/60 px-2 py-0.5 rounded border border-blue-800/40">
                 Model: {sttModel}
@@ -216,7 +242,7 @@ export const SettingsForm: React.FC = () => {
               className="w-full bg-slate-950 border border-slate-700 text-slate-100 text-xs rounded-xl p-3 outline-none focus:border-amber-500 font-mono transition"
             />
             <p className="text-[11px] text-slate-500">
-              Nhận diện giọng nói tiếng Việt và xuất mốc thời gian từng từ (Word timestamps) cho hiệu ứng Karaoke.
+              Tự động dùng khi Groq không khả dụng; lần lượt thử Whisper, Faster Whisper và Gemini.
             </p>
           </div>
 

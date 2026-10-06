@@ -3,6 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import { execFile } from 'child_process';
 import { getVideoMetadata } from '../services/ffmpeg.js';
+import { AI_MODELS } from '../services/api-client.js';
 
 export const settingsRouter = Router();
 
@@ -37,6 +38,8 @@ settingsRouter.get('/', async (req, res) => {
     res.json({
       success: true,
       data: {
+        groqApiKey: maskKey(process.env.GROQ_API_KEY),
+        groqSttModel: process.env.GROQ_STT_MODEL || AI_MODELS.GROQ_STT,
         sttApiKey: maskKey(process.env.VILAO_STT_KEY || process.env.VILAO_API_KEY),
         subtitleApiKey: maskKey(process.env.VILAO_SUBTITLE_KEY || process.env.VILAO_API_KEY),
         embeddingApiKey: maskKey(process.env.VILAO_EMBEDDING_KEY || process.env.VILAO_API_KEY),
@@ -130,6 +133,7 @@ settingsRouter.post('/browse-video', (req, res) => {
 settingsRouter.post('/', (req, res) => {
   try {
     const {
+      groqApiKey,
       sttApiKey,
       subtitleApiKey,
       embeddingApiKey,
@@ -146,6 +150,10 @@ settingsRouter.post('/', (req, res) => {
       envContent = fs.readFileSync(envPath, 'utf-8');
     }
 
+    if (typeof groqApiKey === 'string' && !groqApiKey.includes('••••')) {
+      process.env.GROQ_API_KEY = groqApiKey.trim();
+      envContent = updateEnvKey(envContent, 'GROQ_API_KEY', groqApiKey.trim());
+    }
     if (sttApiKey && !sttApiKey.includes('••••')) {
       process.env.VILAO_STT_KEY = sttApiKey;
       envContent = updateEnvKey(envContent, 'VILAO_STT_KEY', sttApiKey);

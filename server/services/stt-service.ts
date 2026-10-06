@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import ffmpeg from 'fluent-ffmpeg';
-import { AI_MODELS } from './api-client.js';
+import { AI_MODELS, STT_FALLBACK_MODELS } from './api-client.js';
 import { getVideoMetadata } from './ffmpeg.js';
 
 export interface KaraokeWord {
@@ -38,31 +38,121 @@ async function sliceAudioFile(inputPath: string, startTime: number, duration: nu
   });
 }
 
-/**
- * Gọi Whisper STT trên 1 file âm thanh đơn lẻ
- */
-async function transcribeSingleAudio(audioFilePath: string): Promise<{ text: string; duration: number; words: KaraokeWord[] }> {
-  const apiKey = process.env.VILAO_STT_KEY || process.env.VILAO_API_KEY || '';
-  const baseURL = (process.env.VILAO_BASE_URL || 'https://api.vilao.ai/v1').replace(/\/+$/, '');
+function sttError(message: string, status: number, code: string): Error & { status: number; code: string } {
+  return Object.assign(new Error(message), { status, code });
+}
+
+// Chỉ ghi metadata chẩn đoán, không lưu token, payload âm thanh hay transcript.
+function logSTTAttempt(info: Record<string, unknown>): void {
+  const entry = { time: new Date().toISOString(), ...info };
+  console.log('[STTService]', JSON.stringify(entry));
+  try {
+    fs.appendFileSync(path.join(CACHE_DIR, 'stt.log'), JSON.stringify(entry) + '\n', 'utf8');
+  } catch (_) {
+    // Lỗi ghi log không được làm hỏng kết quả STT.
+  }
+}
+
+async function transcribeSingleAudio(audioFilePath: string, accurateDuration = 0): Promise<{ text: string; duration: number; words: KaraokeWord[] }> {
+  const groqKey = (process.env.GROQ_API_KEY || '').trim();
+  const vilaoKey = (process.env.VILAO_STT_KEY || process.env.VILAO_API_KEY || '').trim();
+  if (!groqKey && !vilaoKey) {
+    throw sttError('Chưa cấu hình API Key STT. Vui lòng nhập token trong Cài Đặt Hệ Thống.', 401, 'UNAUTHORIZED');
+  }
+
+  const configuredFallbacks = process.env.STT_FALLBACK_MODELS;
+  const fallbacks = configuredFallbacks === undefined
+    ? STT_FALLBACK_MODELS
+    : configuredFallbacks.split(',').map((model) => model.trim()).filter(Boolean);
+  const models = [...new Set([process.env.STT_MODEL?.trim() || AI_MODELS.STT, ...fallbacks])];
+  const attempts: STTAttempt[] = [];
+  if (groqKey) {
+    attempts.push({ provider: 'groq', model: process.env.GROQ_STT_MODEL?.trim() || AI_MODELS.GROQ_STT, apiKey: groqKey });
+  }
+  if (vilaoKey) {
+    attempts.push(...models.map((model): STTAttempt => ({ provider: 'vilao', model, apiKey: vilaoKey })));
+  }
+  const failures: string[] = [];
+  let lastError: any;
+  let emptyResult: { text: string; duration: number; words: KaraokeWord[] } | undefined;
+
+  for (const attempt of attempts) {
+    const { provider, model } = attempt;
+    const started = Date.now();
+    logSTTAttempt({ provider, model, event: 'start', file: path.basename(audioFilePath) });
+    try {
+      const result = await transcribeWithModel(audioFilePath, attempt, accurateDuration);
+      if (!result.text.trim() || result.words.length === 0) {
+        emptyResult = result;
+        failures.push(`${provider}/${model}: EMPTY_TRANSCRIPT`);
+        logSTTAttempt({ provider, model, event: 'empty', elapsedMs: Date.now() - started });
+        continue;
+      }
+      logSTTAttempt({ provider, model, event: 'success', words: result.words.length, elapsedMs: Date.now() - started });
+      return result;
+    } catch (err: any) {
+      if (err.name === 'TimeoutError' || err.name === 'AbortError') {
+        err = sttError('API STT phản hồi quá chậm, đã hết thời gian chờ.', 504, 'STT_TIMEOUT');
+      } else if (err instanceof SyntaxError) {
+        err = sttError('Gateway STT trả về JSON không hợp lệ.', 502, 'INVALID_STT_RESPONSE');
+      } else if (err instanceof TypeError) {
+        err = sttError('Không thể kết nối tới Gateway STT.', 502, 'STT_NETWORK_ERROR');
+      }
+      logSTTAttempt({ provider, model, event: 'failed', status: err.status || 500, code: err.code || 'STT_FAILED', elapsedMs: Date.now() - started });
+      // Token/số dư Groq độc lập: vẫn thử Vilao. Các model Vilao dùng chung tài khoản.
+      if (provider === 'vilao' && [401, 402].includes(err.status)) throw err;
+      failures.push(`${provider}/${model}: ${err.code || 'STT_FAILED'}`);
+      lastError = err;
+    }
+  }
+
+  // Chỉ kết luận không có lời khi mọi model đều phản hồi hợp lệ nhưng rỗng.
+  // Không biến lỗi nhà cung cấp thành chế độ nhạc rồi lưu cache rỗng.
+  if (emptyResult && !lastError) return emptyResult;
+  throw sttError(
+    `Không nhận diện được giọng nói sau khi thử ${attempts.length} model STT. ${lastError?.message || ''} (${failures.join('; ')})`,
+    lastError?.status || 502,
+    'STT_ALL_MODELS_FAILED'
+  );
+}
+
+interface STTAttempt {
+  provider: 'groq' | 'vilao';
+  model: string;
+  apiKey: string;
+}
+
+async function transcribeWithModel(audioFilePath: string, attempt: STTAttempt, accurateDuration: number): Promise<{ text: string; duration: number; words: KaraokeWord[] }> {
+  const { provider, model, apiKey } = attempt;
+  const isGroq = provider === 'groq';
+  const providerName = isGroq ? 'Groq' : 'Vilao.ai';
+  const baseURL = isGroq ? 'https://api.groq.com/openai/v1' : (process.env.VILAO_BASE_URL || 'https://api.vilao.ai/v1').replace(/\/+$/, '');
 
   const fileBuffer = fs.readFileSync(audioFilePath);
   const ext = path.extname(audioFilePath).toLowerCase();
-  const mimeType = ext === '.wav' ? 'audio/wav' : ext === '.m4a' ? 'audio/m4a' : 'audio/mpeg';
+  const mimeTypes: Record<string, string> = {
+    '.wav': 'audio/wav', '.m4a': 'audio/mp4', '.mp4': 'audio/mp4',
+    '.ogg': 'audio/ogg', '.flac': 'audio/flac', '.aac': 'audio/aac', '.webm': 'audio/webm',
+  };
+  const mimeType = mimeTypes[ext] || 'audio/mpeg';
   const blob = new Blob([fileBuffer], { type: mimeType });
 
   const formData = new FormData();
-  formData.append('file', blob, path.basename(audioFilePath));
-  formData.append('model', AI_MODELS.STT);
+  formData.append('model', model);
   formData.append('language', 'vi');
   formData.append('response_format', 'verbose_json');
   formData.append('timestamp_granularities[]', 'word');
+  formData.append('file', blob, path.basename(audioFilePath));
 
+  const configuredTimeout = Number(process.env.STT_REQUEST_TIMEOUT_MS);
+  const timeoutMs = Number.isInteger(configuredTimeout) && configuredTimeout > 0 && configuredTimeout <= 2147483647 ? configuredTimeout : 60000;
   const res = await fetch(`${baseURL}/audio/transcriptions`, {
     method: 'POST',
     headers: {
       'Authorization': `Bearer ${apiKey}`,
     },
     body: formData,
+    signal: AbortSignal.timeout(timeoutMs),
   });
 
   if (!res.ok) {
@@ -73,11 +163,11 @@ async function transcribeSingleAudio(audioFilePath: string): Promise<{ text: str
     } catch (_) {}
 
     const errCode = parsedErr?.error?.code || '';
-    const errMsg = parsedErr?.error?.message || errBody;
+    const errMsg = String(parsedErr?.error?.message || errBody);
 
     if (res.status === 402 || errCode === 'INSUFFICIENT_BALANCE' || errMsg.includes('Insufficient balance') || errMsg.includes('insufficient_quota')) {
       const error: any = new Error(
-        'Tài khoản API Vilao.ai đã HẾT SỐ DƯ (402 Payment Required / Insufficient Balance). Vui lòng nạp thêm tiền tại https://vilao.ai hoặc cập nhật API Key mới trong Cài Đặt Hệ Thống.'
+        `Tài khoản API ${providerName} đã hết số dư / hạn mức. Vui lòng kiểm tra tài khoản hoặc cập nhật API Key trong Cài Đặt Hệ Thống.`
       );
       error.status = 402;
       error.code = 'INSUFFICIENT_BALANCE';
@@ -86,7 +176,7 @@ async function transcribeSingleAudio(audioFilePath: string): Promise<{ text: str
 
     if (res.status === 401 || errCode === 'invalid_api_key' || errMsg.includes('Incorrect API key')) {
       const error: any = new Error(
-        'API Key STT (VILAO_STT_KEY) không hợp lệ hoặc đã hết hạn (401 Unauthorized). Vui lòng kiểm tra lại trong Cài Đặt Hệ Thống.'
+        `API Key STT ${providerName} (${isGroq ? 'GROQ_API_KEY' : 'VILAO_STT_KEY'}) không hợp lệ hoặc đã hết hạn (401 Unauthorized). Vui lòng kiểm tra lại trong Cài Đặt Hệ Thống.`
       );
       error.status = 401;
       error.code = 'UNAUTHORIZED';
@@ -102,15 +192,19 @@ async function transcribeSingleAudio(audioFilePath: string): Promise<{ text: str
       throw error;
     }
 
-    const error: any = new Error(`Lỗi STT Gateway (HTTP ${res.status}): ${errMsg}`);
+    const error: any = new Error(`Lỗi STT ${providerName} (HTTP ${res.status}): ${errMsg}`);
     error.status = res.status;
     error.code = errCode || `HTTP_${res.status}`;
     throw error;
   }
 
   const response: any = await res.json();
-  const text = response.text || '';
-  const duration = Number(response.duration) || 0;
+  if (!response || typeof response !== 'object' || response.error ||
+      (typeof response.text !== 'string' && !Array.isArray(response.words) && !Array.isArray(response.segments))) {
+    throw sttError('Gateway STT trả về dữ liệu không đúng định dạng transcript.', 502, 'INVALID_STT_RESPONSE');
+  }
+  let text = typeof response.text === 'string' ? response.text : '';
+  const duration = accurateDuration || Number(response.duration) || 0;
 
   let words: KaraokeWord[] = [];
 
@@ -118,20 +212,21 @@ async function transcribeSingleAudio(audioFilePath: string): Promise<{ text: str
   if (Array.isArray(response.words) && response.words.length > 0) {
     words = response.words
       .map((w: any) => ({
-        word: (w.word || '').trim(),
-        start: Number(w.start) || 0,
-        end: Number(w.end) || 0,
+        word: typeof w?.word === 'string' ? w.word.trim() : '',
+        start: Number(w?.start),
+        end: Number(w?.end),
       }))
-      .filter((w: KaraokeWord) => w.word.length > 0);
+      .filter((w: KaraokeWord) => w.word.length > 0 && Number.isFinite(w.start) && Number.isFinite(w.end) && w.start >= 0 && w.end >= w.start);
   }
 
   // 2. Nếu không có words ở root, kiểm tra seg.words trong từng segment
   if (words.length === 0 && Array.isArray(response.segments) && response.segments.length > 0) {
     for (const seg of response.segments) {
+      if (!seg || typeof seg !== 'object') continue;
       if (Array.isArray(seg.words) && seg.words.length > 0) {
         for (const sw of seg.words) {
-          const wText = (sw.word || '').trim();
-          if (wText) {
+          const wText = typeof sw?.word === 'string' ? sw.word.trim() : '';
+          if (wText && Number.isFinite(Number(sw.start)) && Number.isFinite(Number(sw.end)) && Number(sw.start) >= 0 && Number(sw.end) >= Number(sw.start)) {
             words.push({
               word: wText,
               start: Number(sw.start) || 0,
@@ -141,7 +236,7 @@ async function transcribeSingleAudio(audioFilePath: string): Promise<{ text: str
         }
       } else {
         // Fallback: Nội suy từ trong phân đoạn segment
-        const rawTokens = (seg.text || '').trim().split(/\s+/).filter(Boolean);
+        const rawTokens = (typeof seg.text === 'string' ? seg.text : '').trim().split(/\s+/).filter(Boolean);
         if (rawTokens.length === 0) continue;
 
         const segStart = Number(seg.start) || 0;
@@ -165,7 +260,10 @@ async function transcribeSingleAudio(audioFilePath: string): Promise<{ text: str
   // 3. Fallback nếu không có cả segments
   if (words.length === 0 && text.trim()) {
     const tokens = text.trim().split(/\s+/).filter(Boolean);
-    const totalDur = duration || 30.0;
+    if (duration <= 0) {
+      throw sttError('Không xác định được thời lượng âm thanh để tạo mốc phụ đề.', 502, 'INVALID_STT_RESPONSE');
+    }
+    const totalDur = duration;
     const wordDur = totalDur / tokens.length;
     for (let i = 0; i < tokens.length; i++) {
       words.push({
@@ -175,6 +273,8 @@ async function transcribeSingleAudio(audioFilePath: string): Promise<{ text: str
       });
     }
   }
+
+  if (!text.trim() && words.length > 0) text = words.map((word) => word.word).join(' ');
 
   return {
     text,
@@ -204,8 +304,8 @@ export async function transcribeAudio(audioFilePath: string): Promise<STTResult>
 
   // 2. Pass 1: Nhận diện toàn bộ file âm thanh
   // BẮT BUỘC KHÔNG BỌC CATCH NUỐT LỖI API:
-  // Nếu API báo 402 (Hết tiền), 401 (Sai key), 429 hay lỗi mạng, hàm phải ném lỗi để người dùng biết!
-  const firstPass = await transcribeSingleAudio(audioFilePath);
+  // Groq lỗi thì thử Vilao; 401/402 của Vilao trả ngay vì các model dùng chung token.
+  const firstPass = await transcribeSingleAudio(audioFilePath, accurateDuration);
   if (!accurateDuration && firstPass.duration > 0) {
     accurateDuration = firstPass.duration;
   }
@@ -239,7 +339,7 @@ export async function transcribeAudio(audioFilePath: string): Promise<STTResult>
     try {
       await sliceAudioFile(audioFilePath, tailStart, tailDuration, tempTailPath);
       if (fs.existsSync(tempTailPath)) {
-        const tailPass = await transcribeSingleAudio(tempTailPath);
+        const tailPass = await transcribeSingleAudio(tempTailPath, tailDuration);
         if (tailPass.words.length > 0) {
           // Cộng offset tailStart vào mốc thời gian của từng từ
           const adjustedTailWords: KaraokeWord[] = tailPass.words.map((w) => ({

@@ -45,7 +45,7 @@
   ├── Watcher Module         (server/watcher.ts)                : Chokidar theo dõi Folder Source (Video + Ảnh)
   ├── Frame Extractor        (server/services/ffmpeg.ts)        : Trích frame JPEG 720p / thumbnail từ video và ảnh
   ├── Vision Analyzer        (server/services/vision-analyzer.ts): Phân loại 4 giai đoạn bằng ts/gemini-3.1-flash-lite
-  ├── STT Whisper Engine     (server/services/stt-service.ts)   : Nhận diện tiếng Việt bóc word timestamps (response.words + seg.words)
+  ├── STT Groq + Fallback    (server/services/stt-service.ts)   : Ưu tiên Groq trực tiếp; dự phòng Whisper/Faster Whisper/Gemini Vilao, word timestamps cho Karaoke
   ├── Subtitle Sync Engine   (server/services/subtitle-fixer.ts): Phân đoạn phụ đề 9:16 bảo toàn 100% từ ngữ & mốc thời gian Voice, chuẩn hóa danh xưng Phật học & ngữ pháp tiếng Việt
   ├── Storyline Engine       (server/services/storyline-engine.ts): Phân bổ clip/ảnh 4 giai đoạn theo thời lượng Voice
   └── Render Service         (server/services/render-service.ts): Render MP4 1080x1920 (Cross Dissolve + Image Zoom + ASS Karaoke + Outro)
@@ -61,7 +61,7 @@
   ├── .cache/                : Cache frames trích xuất (.cache/frames), thumbnails, uploads, render temp
   ├── assets/fonts/          : Thư viện 6 font tiếng Việt chuẩn (Lexend, Be Vietnam Pro, Nunito, Montserrat, Inter, Quicksand - Medium/Bold/ExtraBold)
   ├── assets/bgm/            : Kho nhạc thiền Phật giáo không lời
-  ├── .env                   : VILAO_STT_KEY, VILAO_SUBTITLE_KEY, VILAO_EMBEDDING_KEY, VILAO_BASE_URL, ROOT_SOURCE_DIR, EXPORT_DIR
+  ├── .env                   : GROQ_API_KEY, GROQ_STT_MODEL, VILAO_STT_KEY, VILAO_SUBTITLE_KEY, VILAO_EMBEDDING_KEY, VILAO_BASE_URL, ROOT_SOURCE_DIR, EXPORT_DIR
   └── config.json            : Cấu hình mặc định (font family, font weight, all caps, font size, ducking volume, clip duration, defaultOutroPath, outroEnabled)
 =======================================================================================================
 ```
@@ -70,7 +70,8 @@
 
 ## 3. CẤU HÌNH API VÀ MODEL (API GATEWAY & MODELS MAP)
 
-Tất cả các dịch vụ AI kết nối qua API Gateway chuẩn OpenAI SDK (`https://api.vilao.ai/v1`) với **3 Token API độc lập**:
+STT ưu tiên Groq qua REST multipart trực tiếp `https://api.groq.com/openai/v1/audio/transcriptions` với token `GROQ_API_KEY`. Các API STT cũ làm dự phòng; sửa phụ đề, Vision và Embedding tiếp tục qua API Gateway chuẩn OpenAI SDK (`https://api.vilao.ai/v1`) với **3 Token Vilao độc lập**:
+- **Key Groq (STT ưu tiên)**: `GROQ_API_KEY`; model `GROQ_STT_MODEL` mặc định `whisper-large-v3-turbo`. Không có khóa Groq thì dùng chuỗi Vilao cũ; không có khóa Vilao thì chỉ thử Groq.
 - **Base URL**: `https://api.vilao.ai/v1` (`VILAO_BASE_URL`)
 - **Key 1 (STT)**: `VILAO_STT_KEY` (Token `VideoTamDuc_STT`)
 - **Key 2 (Sửa Phụ Đề)**: `VILAO_SUBTITLE_KEY` (Token `VideoTamDuc_sửa phụ đề`)
@@ -78,7 +79,8 @@ Tất cả các dịch vụ AI kết nối qua API Gateway chuẩn OpenAI SDK (`
 
 | Phân Hệ / Token | Biến Môi Trường | Endpoint | Model Sử Dụng | Nhiệm Vụ Cụ Thể |
 | :--- | :--- | :--- | :--- | :--- |
-| **STT (Voice to Text)** | `VILAO_STT_KEY` | `/audio/transcriptions` | `tsa/groq/whisper-large-v3` | Bóc tách giọng nói tiếng Việt siêu tốc kèm initial `prompt` định hướng ngữ cảnh chuẩn âm học, xuất word timestamps chi tiết từng từ cho Karaoke. |
+| **STT Groq (ưu tiên)** | `GROQ_API_KEY`, `GROQ_STT_MODEL` | `https://api.groq.com/openai/v1/audio/transcriptions` | `whisper-large-v3-turbo` | Multipart `model=whisper-large-v3-turbo`, `language=vi`, `response_format=verbose_json`, `timestamp_granularities[]=word`, `file`; nhận `words[].word/start/end`, ánh xạ thành KaraokeWord. Khi lỗi (kể cả 401/402/403/429), timeout, JSON sai hoặc transcript rỗng thì thử Vilao. |
+| **STT Vilao (dự phòng)** | `VILAO_STT_KEY` | `https://api.vilao.ai/v1/audio/transcriptions` (theo `VILAO_BASE_URL`) | `tsa/groq/whisper-large-v3` → `tsa/groq/whisper-large-v3-turbo` → `bh2/faster-whisper-chat` → `tsa/gemini/gemini-2.5-flash` → `tsa/gemini/gemini-2.5-flash-lite` | Giữ `STT_MODEL` và `STT_FALLBACK_MODELS` cho chuỗi Vilao. 401/402 Vilao dừng vì token dùng chung; các lỗi khác hoặc transcript rỗng thử model kế tiếp. Không truyền prompt dài. |
 | **Sửa Phụ Đề Ngữ Cảnh AI** | `VILAO_SUBTITLE_KEY` | `/chat/completions` | `ts/gemini-3.1-flash-lite` | Kiểm tra & sửa lỗi sai âm, nhầm thanh điệu, sai vần tiếng Việt theo ngữ cảnh câu văn (tiềm tàng, bủa vây, dân tộc, dù/dẫu...) và thuật toán Word-Alignment bảo toàn 100% mốc thời gian Karaoke. |
 | **Phân Tích Cảnh (Vision)** | `VILAO_EMBEDDING_KEY` | `/chat/completions` | `ts/gemini-3.1-flash-lite` | Nhận diện 4 giai đoạn thi công bàn thờ từ 2 frame ảnh đại diện JPEG (KHÔNG GỬI VIDEO). |
 | **Vector Embedding** | `VILAO_EMBEDDING_KEY` | `/embeddings` | `emb/text-embedding-3-large` | Nhúng vector mô tả cảnh khi cần tìm kiếm ngữ nghĩa. |
@@ -162,7 +164,7 @@ Tổng thời lượng Video = Thời lượng Voice chính xác (T giây từ f
       - **Tầng 7 (Cơ Chế Phòng Thủ STT, Phân Biệt Lỗi API Chuẩn Xác & Chế Độ Video Nhạc Nền - Music / Non-Vocal Safe Mode & API Error Transparency)**:
         + **Đo thời lượng độc lập bằng ffprobe**: Luôn lấy thời lượng audio chính xác 100% trước hoặc độc lập với STT.
         + **Phân biệt rạch ròi Lỗi API vs Nhạc thuần túy**: 
-          * *Nhạc thuần túy*: Chỉ khi Whisper STT trả về HTTP 200 OK thành công nhưng `text` rỗng hoặc `words` rỗng thì mới đánh dấu `isMusic: true`.
+          * *Nhạc thuần túy*: Chỉ khi mọi lần thử STT (Groq và chuỗi Vilao được cấu hình) đều trả transcript rỗng hợp lệ thì mới đánh dấu `isMusic: true`.
           * *Lỗi API (HTTP 402 Hết số dư / 401 Sai key / 429 Quá hạn mức / 500 Lỗi Gateway)*: Tuyệt đối **KHÔNG nuốt lỗi** thành chế độ nhạc nền. Hệ thống ném ngoại lệ rõ ràng với thông điệp tiếng Việt cụ thể (ví dụ: *Tài khoản API Vilao.ai đã HẾT SỐ DƯ (402 Payment Required)...*).
         + **Giao diện Trực quan & Actionable Error Banner**:
           * Khi gặp lỗi API: Hiển thị Banner đỏ nổi bật kèm nút `[🔄 Thử Lại Nhận Diện]`, nút `[⚙️ Cài Đặt API Key]` (chuyển thẳng sang Tab Cài Đặt), và nút `[🎵 Tiếp Tục Dùng Làm Nhạc Nền]` (nếu muốn bỏ qua phụ đề).
@@ -172,7 +174,7 @@ Tổng thời lượng Video = Thời lượng Voice chính xác (T giây từ f
           * Khi người dùng yêu cầu STT (`skipStt: false`): Nếu file đã có trong bảng `voices` nhưng có `subtitles.length === 0` (do trước đó từng bị lỗi hoặc nạp khi tắt STT), hệ thống tự động bỏ qua cache rỗng và kích hoạt Whisper STT để tạo phụ đề.
           * Chỉ tái sử dụng cache khi file đã có sẵn phụ đề hợp lệ (`subtitles.length > 0`), hoặc khi người dùng chủ động tắt STT (`skipStt: true`).
         + **Tùy Chọn Bật/Tắt Tự Động Tạo Phụ Đề & Kích Hoạt Tức Thì (Instant STT Toggle Engine)**:
-          * Checkbox trực quan ngay tại Unified Voice Dropzone ở Bước 1 của Wizard: `[x] Tự động tạo phụ đề (AI STT Whisper + Gemini)`.
+          * Checkbox trực quan ngay tại Unified Voice Dropzone ở Bước 1 của Wizard: `[x] Tự động tạo phụ đề (AI STT + Gemini)`; Groq ưu tiên, Vilao dự phòng.
           * Mặc định: BẬT (`checked: true`), tự động lưu tùy chọn của người dùng vào `localStorage` (`auto_video_auto_stt_enabled`).
           * **Kích hoạt tức thì**: Khi người dùng tick [BẬT] lại checkbox nếu đang có file âm thanh được chọn và chưa có phụ đề, hệ thống tự động kích hoạt nhận diện STT ngay lập tức mà không cần phải nạp lại file.
           * Khi TẮT (`skipStt: true`): Hệ thống bỏ qua gọi Whisper STT và Gemini AI spell-check, chỉ đo thời lượng audio bằng `ffprobe` trong ~0.2s, ghi nhớ vào database và chuyển thẳng sang trạng thái sẵn sàng cho Chế độ Nhạc nền hoặc Dán phụ đề thủ công.
@@ -353,8 +355,8 @@ CREATE TABLE voices (
 | `GET` | `/api/render/status/:jobId` | - | Lấy tiến độ % render (0 - 100%) và đường dẫn file output chính xác |
 | `POST` | `/api/render/open-folder` | `{ filePath: string }` | Mở thư mục chứa video trên Windows Explorer (và tự động highlight chọn file video vừa xuất) |
 | `POST` | `/api/render/open-video` | `{ filePath: string }` | Mở phát video trực tiếp bằng ứng dụng xem video mặc định của Windows |
-| `GET` | `/api/settings` | - | Đọc cấu hình 3 API Key .env / config.json / defaultOutroPath |
-| `POST` | `/api/settings` | `{ sttApiKey, subtitleApiKey, embeddingApiKey, baseUrl, rootSourceDir, exportDir, config }` | Lưu cấu hình 3 API Key .env / config.json / defaultOutroPath |
+| `GET` | `/api/settings` | - | Đọc khóa Groq (`groqApiKey` che), `groqSttModel`, 3 khóa Vilao (che), config.json / defaultOutroPath |
+| `POST` | `/api/settings` | `{ groqApiKey?, sttApiKey, subtitleApiKey, embeddingApiKey, baseUrl, rootSourceDir, exportDir, config }` | Lưu khóa Groq và 3 khóa Vilao vào .env; khóa che giữ nguyên, `groqApiKey: ''` tắt Groq; cập nhật process.env tức thì |
 | `POST` | `/api/settings/browse-folder` | `{ initialPath?: string }` | Mở hộp thoại FolderBrowserDialog của Windows qua `picker.ps1` |
 | `POST` | `/api/settings/browse-video` | `{ initialPath?: string }` | Mở hộp thoại OpenFileDialog của Windows chọn video Outro (.mp4, .mov, .mkv...) qua `video-picker.ps1` |
 | `GET` | `/media/stream?path=...` | `path` | Stream video & audio hỗ trợ HTTP Range header cho Preview Player |
@@ -366,7 +368,7 @@ CREATE TABLE voices (
 
 ```
 Auto_Video_TamDuc/
-├── .env                        # Chứa VILAO_STT_KEY, VILAO_SUBTITLE_KEY, VILAO_EMBEDDING_KEY, VILAO_BASE_URL, ROOT_SOURCE_DIR, EXPORT_DIR
+├── .env                        # Chứa GROQ_API_KEY, GROQ_STT_MODEL, VILAO_STT_KEY, VILAO_SUBTITLE_KEY, VILAO_EMBEDDING_KEY, VILAO_BASE_URL, ROOT_SOURCE_DIR, EXPORT_DIR
 ├── config.json                 # Cấu hình app (default font, ducking volume, clip duration, defaultOutroPath, outroEnabled)
 ├── package.json                # Dependencies React, Remotion, Express, SQLite, FFmpeg
 ├── vite.config.ts              # Proxy port 5173 -> backend 3001
@@ -393,7 +395,7 @@ Auto_Video_TamDuc/
 │   └── services/
 │       ├── api-client.ts       # OpenAI SDK trỏ https://api.vilao.ai/v1
 │       ├── ffmpeg.ts           # Trích frame JPEG 720p, thumbnail, metadata
-│       ├── stt-service.ts      # tsa/groq/whisper-large-v3
+│       ├── stt-service.ts      # Groq trực tiếp ưu tiên → Whisper/Faster Whisper/Gemini Vilao dự phòng
 │       ├── subtitle-fixer.ts   # ts/gemini-3.1-flash-lite
 │       ├── vision-analyzer.ts  # Phân tích 4 giai đoạn bằng Gemini
 │       ├── storyline-engine.ts # Thuật toán xếp clip 4 giai đoạn
@@ -474,6 +476,42 @@ Hệ thống đã tạo sẵn bộ công cụ sao lưu tự động toàn bộ m
 ---
 
 ## 10. NHẬT KÝ KIỂM THỬ & TỐI ƯU HÓA TOÀN DIỆN (SYSTEM AUDIT LOG)
+
+- **06/10/2026 — Đóng gói bản Groq STT để cập nhật GitHub**:
+  - `npm run build:all` hoàn tất: TypeScript, frontend production và biên dịch C# launcher `Auto_Video_TamDuc.exe` (7168 byte). Kiểm tra header `MZ` và chữ ký `PE` hợp lệ. Dùng kết quả 29/29 kiểm thử STT và phép thử Groq HTTP 200 đã ghi bên dưới; không thay logic sau kiểm tra.
+  - EXE là launcher chạy `npm run dev` từ thư mục ứng dụng, cần mã nguồn/dependencies và `.env` cục bộ; frontend `dist/` đã build nhưng vẫn nằm trong Git ignore theo thiết kế hiện tại.
+  - Phạm vi cập nhật repo `ngonco/auto_video_tamduc`, nhánh `main`: mã nguồn STT/Cài đặt, `.env.example` không có khóa, `package.json`, `scripts/stt-service.test.ts`, tài liệu và EXE. Không đưa `.env`, `.cache/`, exports hay thay đổi dữ liệu `database/library.db` vào commit này.
+
+- **06/10/2026 — Thay xAI bằng Groq STT sau khi kiểm tra khóa thực**:
+  - Theo yêu cầu mới, bỏ xAI khỏi chuỗi STT và Cài đặt; không tích hợp VieNeu. Groq trực tiếp (`whisper-large-v3-turbo`) ưu tiên đầu tiên, tiếp theo là 5 model Vilao hiện có; áp dụng cả Pass 1 và Pass 2.
+  - Trước khi sửa tích hợp, gọi `POST https://api.groq.com/openai/v1/audio/transcriptions` bằng khóa người dùng và câu nói tổng hợp Windows: HTTP 200 sau 2408 ms, thời lượng API 5.188875264 s, đúng câu thử tiếng Anh, 10 từ với mốc thời gian hợp lệ. Request dùng `language=vi`, `verbose_json`, `timestamp_granularities[]=word`; đây là kiểm tra khóa và định dạng, chưa đánh giá độ chính xác trên bản thu tiếng Việt thật.
+  - `api-client.ts`: `AI_MODELS.GROQ_STT`, cấu hình `GROQ_STT_MODEL` mặc định `whisper-large-v3-turbo`. `stt-service.ts`: provider `groq`, endpoint chuẩn OpenAI và `words[].word/start/end`; lỗi Groq kể cả token/hạn mức vẫn chuyển Vilao. Token hai nhà cung cấp tách biệt.
+  - `settings.routes.ts`/`SettingsForm.tsx`: `groqApiKey` (che), `groqSttModel`, thẻ Groq đứng đầu; lưu/xóa khóa cập nhật `.env` và process.env. `.env.example` đổi sang `GROQ_API_KEY` trống; `.env` lưu khóa đã kiểm tra, bỏ cấu hình xAI cũ; không đổi SQLite.
+  - `scripts/stt-service.test.ts` chuyển kiểm thử provider xAI thành Groq: 29/29 bài thành công, kiểm tra endpoint/multipart, tách khóa, timestamps, fallback đầy đủ 6 model, lỗi 401/402/403/429/503/network/timeout và transcript rỗng/JSON sai. TypeScript và build production thành công; chỉ cảnh báo bundle lớn sẵn có.
+  - Kiểm tra sau tích hợp bằng `.cache/groq-smoke.ts`: Groq thành công sau 929 ms, 10 từ, mốc đầu 0.1 s và cuối 4.54 s, duration ffprobe 5.188844 s; Vilao được tắt chỉ trong tiến trình kiểm tra để chứng minh provider trực tiếp. `.cache/groq-settings-check.ts` xác nhận GET che khóa, POST che/thiếu giữ nguyên, POST trống/mới cập nhật đúng; không ghi ổ đĩa trong kiểm tra cấu hình. Dùng lại câu tổng hợp `.cache/grok-smoke.wav`, không gửi bản thu thật hoặc sửa SQLite.
+
+- **06/10/2026 — Grok STT ưu tiên, Vilao dự phòng**:
+  - `api-client.ts` bổ sung `AI_MODELS.GROK_STT`; `stt-service.ts` thêm nhà cung cấp xAI đứng đầu cho cả Pass 1 và Pass 2. Giữ chuỗi 5 model Vilao và cấu hình hiện có; không gửi khóa xAI sang Vilao hoặc ngược lại.
+  - API Grok theo [tài liệu chính thức xAI](https://docs.x.ai/developers/model-capabilities/audio/speech-to-text): `POST https://api.x.ai/v1/stt`, `language=vi`, file đứng cuối multipart, ánh xạ `words[].text` sang `KaraokeWord.word` và giữ nguyên `start/end`. Không gửi tham số Whisper sang Grok.
+  - Grok lỗi token/hạn mức vẫn fallback Vilao vì hai tài khoản độc lập. Chỉ kết luận nhạc khi mọi lần thử thực hiện đều trả transcript rỗng hợp lệ. Log `.cache/stt.log` bổ sung `provider`, không ghi khóa hoặc nội dung.
+  - `settings.routes.ts` và `SettingsForm.tsx`: thẻ Grok đầu tiên, khóa hiển thị che; lưu khóa mới hoặc xóa khóa để tắt Grok. `.env.example` thêm `XAI_API_KEY` trống và `XAI_STT_MODEL`; khóa thực chỉ lưu `.env` đã được Git bỏ qua. Không đổi schema SQLite.
+  - `GeneratorWizard.tsx` cập nhật nhãn tự động tạo phụ đề thành `AI STT + Gemini` để khớp chuỗi nhiều nhà cung cấp.
+  - Kiểm thử: 29/29 bài `npm run test:stt` thành công (giả lập); gồm endpoint/multipart native Grok, khóa tách biệt, giữ mốc từng từ, fallback khi 401/402/403/429/503/network/timeout/rỗng/JSON sai, chuỗi đầy đủ 6 model, trường hợp chỉ có khóa Grok và nhạc. TypeScript và build production thành công, chỉ cảnh báo bundle lớn sẵn có.
+  - Kiểm tra API cài đặt cô lập bằng `.cache/grok-settings-check.ts`: GET che khóa; POST khóa che hoặc thiếu trường giữ khóa cũ; POST trống tắt Grok và POST khóa mới cập nhật cấu hình. Kiểm tra chặn ghi ổ đĩa, không thay khóa thực và không khởi động watcher/SQLite.
+  - Gọi thật ngày 06/10/2026 lúc 14:47 giờ Việt Nam bằng `.cache/grok-smoke.ts` và câu nói tổng hợp Windows `.cache/grok-smoke.wav` (không gửi bản thu người dùng, không sửa SQLite): Grok trả HTTP 403, thông báo tài khoản/team chưa có credits hoặc licenses. Chưa xác minh được transcript thành công với khóa hiện tại; cần cấp credits/license tại console.x.ai. 403 Grok vẫn chuyển sang Vilao trong ứng dụng (đã kiểm thử giả lập). Khóa không xuất ra log/mã nguồn.
+
+- **05/10/2026 — STT Model Fallback & Diagnostic Log**:
+  - Tái hiện trên voice mới nhất: `tsa/groq/whisper-large-v3` trả HTTP 503, mã `SERVICE_UNAVAILABLE`, thông báo `All providers failed for media request`. Log tái hiện: `.cache/stt-diagnostic.log`.
+  - `server/services/api-client.ts` khai báo 4 model dự phòng; `server/services/stt-service.ts` thử tuần tự và loại bỏ tên trùng, cùng endpoint `/audio/transcriptions` và token STT. `GET /models` xác nhận cả 5 model đều thuộc loại `transcribe`; giữ nguyên prefix `tsa/` và `bh2/` khi gọi API.
+  - Cấu hình `.env`: `STT_MODEL` là model chính; `STT_FALLBACK_MODELS` là danh sách dự phòng phân cách dấu phẩy (không khai báo dùng mặc định, để trống tắt fallback); `STT_REQUEST_TIMEOUT_MS` mặc định 60000 ms mỗi lần thử, áp dụng cả đọc body. `.env.example` có mẫu cấu hình.
+  - Lỗi token/số dư (401/402) được trả ngay. Lỗi nhà cung cấp, timeout, 429, giới hạn file/định dạng theo model (413/415), phản hồi JSON sai định dạng và transcript rỗng kích hoạt model tiếp theo. Nếu toàn bộ thất bại, trả `STT_ALL_MODELS_FAILED`, không lưu voice rỗng vào SQLite. Chỉ đánh dấu nhạc khi mọi lần thử đều thành công nhưng không nhận diện được lời.
+  - Ghi JSON lines vào `.cache/stt.log`: thời gian, tên model, sự kiện start/failed/empty/success, status/code, thời gian xử lý và số từ; không ghi token, âm thanh hay transcript. Cơ chế fallback áp dụng cả Pass 1 và Pass 2 phục hồi đuôi.
+  - Model chỉ trả text dùng thời lượng đo bằng ffprobe để nội suy mốc từ (độ chính xác thấp hơn timestamp gốc); phản hồi chỉ có words/segments được ghép thành text thay vì bị nhận nhầm là nhạc. Chuẩn MIME cho WAV/M4A/MP4/OGG/FLAC/AAC/WEBM.
+  - `scripts/stt-service.test.ts`, chạy bằng `npm run test:stt`: kiểm thử giả lập thứ tự fallback, 503/429/network/timeout, dừng 401/402, giới hạn file theo model, transcript rỗng và JSON lỗi, nội suy thời lượng, bảo toàn words/segments, khử model trùng và tắt fallback. Không gửi dữ liệu ra mạng và không sửa SQLite.
+  - Kiểm tra thực tế: Whisper chính, Whisper Turbo và Faster Whisper đều trả 503 tại thời điểm kiểm tra. Thử Gemini với bản thu thật chưa thực hiện được vì xét duyệt tự động chặn xuất bản thu ra API bên ngoài; không xem đây là bằng chứng Gemini lỗi. 17/17 kiểm thử STT giả lập đã qua, gồm chuỗi đủ 5 model; TypeScript và build production thành công (Vite chỉ cảnh báo bundle lớn). Backend health trả 200 sau sửa.
+  - Đóng gói sau sửa STT ngày 05/10/2026: frontend `dist/` đã build thành công; chạy `npm run build:exe` thành công và tạo lại `Auto_Video_TamDuc.exe`, kiểm tra header Windows executable hợp lệ. EXE vẫn là launcher chạy mã nguồn hiện tại trong thư mục ứng dụng qua `npm run dev`, không phải gói độc lập chỉ chứa một file.
+  - Log thực tế sau đóng gói (16:27:57–16:30:00 ngày 05/10/2026, giờ Việt Nam): `.cache/stt.log` xác nhận cả 5 model đều được thử và trả HTTP 503 `SERVICE_UNAVAILABLE`. File MP3 50.964898 giây, 1,224,038 byte đọc/giải mã cục bộ không lỗi; `/models` trả 200 và cả 5 model active, loại transcribe, giới hạn 3/25/100 MB đều lớn hơn file.
+  - Kiểm tra tương thích thêm: yêu cầu multipart tối giản chỉ chứa `file` và `model`, dùng âm thanh tổng hợp 1 giây PCM WAV 16 kHz mono, không dùng bản thu của người dùng. `bh2/faster-whisper-chat` trả 503 sau 306 ms; `tsa/gemini/gemini-2.5-flash-lite` trả 503 sau 30300 ms. Lỗi được tái hiện cả khi không có `language`, `response_format`, `timestamp_granularities[]`; log `.cache/stt-compatibility.log`. Cần log/provider phía Gateway để xác định nguyên nhân sâu hơn; chưa có lần STT thực tế thành công.
 
 - **Native Dialogs (PowerShell STA)**: Đồng bộ hóa toàn bộ 4 script (`picker.ps1`, `audio-picker.ps1`, `media-picker.ps1`, `video-picker.ps1`) với cơ chế xử lý `InitialDir` thông minh (tự động nhận diện thư mục cha nếu truyền file path) và thiết lập `$form.ShowInTaskbar = $true` + `$form.WindowState = Normal` để đảm bảo hộp thoại luôn nổi lên trên cùng màn hình.
 - **Config Persistence**: Tối ưu hóa việc lưu trữ và đồng bộ hóa `defaultOutroPath`, `outroEnabled`, `outroDuration` đồng thời ở cả cấp root và khối `defaults` trong `config.json` để tương thích ngược 100% với các service backend.
@@ -710,14 +748,3 @@ Hệ thống đã tạo sẵn bộ công cụ sao lưu tự động toàn bộ m
     + Khi Render FFmpeg: File ASS karaoke tự động chèn các thẻ `{\k...}` khớp chính xác với mốc thời gian từng câu hát.
 
 - **Build & Quality Assurance**: Dự án đã vượt qua bài kiểm tra `npx tsc --noEmit`, `npm run build` và `npm run build:exe` với 0 lỗi cú pháp, toàn bộ các luồng Thư viện, Tạo video nhanh, Dựng timeline và Xuất MP4 hoạt động trơn tru, ổn định tuyệt đối.
-
-
-
-
-
-
-
-
-
-
-

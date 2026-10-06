@@ -11,6 +11,7 @@
     "build:exe": "powershell -Command \"Stop-Process -Name Auto_Video_TamDuc -Force -ErrorAction SilentlyContinue; Start-Sleep -Milliseconds 300\"; C:\\Windows\\Microsoft.NET\\Framework64\\v4.0.30319\\csc.exe /target:winexe /reference:System.Windows.Forms.dll,System.Drawing.dll /out:Auto_Video_TamDuc.exe Launcher.cs",
     "build:all": "npm run build && npm run build:exe",
     "preview": "vite preview",
+    "test:stt": "tsx scripts/stt-service.test.ts",
     "backup": "powershell -ExecutionPolicy Bypass -File ./backup.ps1"
   },
   "dependencies": {

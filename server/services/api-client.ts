@@ -5,11 +5,20 @@ dotenv.config();
 export type AIServiceType = 'STT' | 'SUBTITLE' | 'EMBEDDING';
 
 export const AI_MODELS = {
+  GROQ_STT: process.env.GROQ_STT_MODEL || 'whisper-large-v3-turbo',
   STT: process.env.STT_MODEL || 'tsa/groq/whisper-large-v3',
   SUBTITLE_FIX: process.env.SUBTITLE_FIX_MODEL || 'ts/gemini-3.1-flash-lite',
   VISION: process.env.VISION_MODEL || 'ts/gemini-3.1-flash-lite',
   EMBEDDING: process.env.EMBEDDING_MODEL || 'emb/text-embedding-3-large',
 };
+
+// Tất cả đều dùng /audio/transcriptions, giữ nguyên prefix của Gateway.
+export const STT_FALLBACK_MODELS = [
+  'tsa/groq/whisper-large-v3-turbo',
+  'bh2/faster-whisper-chat',
+  'tsa/gemini/gemini-2.5-flash',
+  'tsa/gemini/gemini-2.5-flash-lite',
+];
 
 /**
  * Khởi tạo OpenAI Client tương thích với Gateway https://api.vilao.ai/v1
